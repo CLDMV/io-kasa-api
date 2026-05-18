@@ -1,29 +1,83 @@
 {
-  "name": "kasa-api",
-  "version": "0.1.0",
-  "description": "Slothlet-powered API module for controlling TP-Link Kasa IoT devices on the local network.",
-  "type": "module",
-  "private": true,
-  "exports": {
-    ".": "./src/index.mts"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "discover": "node --no-warnings --experimental-strip-types tools/discover.mts"
-  },
-  "dependencies": {
-    "@cldmv/slothlet": "^3.4.1",
-    "esbuild": "^0.28.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.9.0",
-    "typescript": "^6.0.3",
-    "vitest": "^2.1.8"
-  },
-  "engines": {
-    "node": ">=20"
-  }
+	"name": "@cldmv/kasa-api",
+	"version": "0.1.0",
+	"description": "Slothlet-powered API module for controlling TP-Link Kasa IoT devices on the local network.",
+	"type": "module",
+	"exports": {
+		".": "./src/index.mts"
+	},
+	"scripts": {
+		"build": "tsc -p .configs/tsconfig.base.json",
+		"typecheck": "tsc -p .configs/tsconfig.base.json",
+		"test": "vitest run --config .configs/vitest.config.mts",
+		"test:watch": "vitest --config .configs/vitest.config.mts",
+		"discover": "node --no-warnings --experimental-strip-types tools/discover.mts"
+	},
+	"keywords": [
+		"kasa",
+		"tp-link",
+		"tplink",
+		"smarthome",
+		"smart-home",
+		"home-automation",
+		"iot",
+		"smart-plug",
+		"smart-bulb",
+		"smart-switch",
+		"dimmer",
+		"hs100",
+		"hs110",
+		"hs300",
+		"slothlet",
+		"local-network",
+		"nodejs",
+		"esm",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=20.19.0"
+	},
+	"author": {
+		"name": "Shinrai",
+		"company": "CLDMV",
+		"email": "git+npm@cldmv.net",
+		"url": "https://cldmv.net"
+	},
+	"contributors": [
+		{
+			"name": "CLDMV",
+			"url": "https://github.com/CLDMV"
+		}
+	],
+	"license": "Apache-2.0",
+	"funding": {
+		"type": "github",
+		"url": "https://github.com/sponsors/shinrai"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/CLDMV/kasa-api.git"
+	},
+	"bugs": {
+		"url": "https://github.com/CLDMV/kasa-api/issues"
+	},
+	"homepage": "https://github.com/CLDMV/kasa-api#readme",
+	"publishConfig": {
+		"access": "public"
+	},
+	"dependencies": {
+		"@cldmv/slothlet": "^3.5.0",
+		"esbuild": "^0.28.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.9.0",
+		"typescript": "^6.0.3",
+		"vitest": "^2.1.8"
+	},
+	"files": [
+		"src/",
+		"LICENSE",
+		"README.md"
+	],
+	"sideEffects": false
 }

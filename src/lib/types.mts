@@ -116,6 +116,18 @@ export interface DiscoverOptions {
   maxDevices?: number;
 }
 
+/** Result of broadcast-address auto-detection. */
+export interface ResolvedBroadcast {
+  /** Local interface IPv4 to bind to. */
+  bindAddress: string;
+  /** Directed broadcast address for that interface's subnet. */
+  broadcast: string;
+  /** Interface name (eth0, en0, etc). Informational. */
+  interface: string;
+  /** CIDR prefix length. Informational. */
+  cidr: number;
+}
+
 /**
  * Shape of `self` inside an API module. Slothlet flattens
  * `<folder>/<folder>.mts` into a single namespace, so e.g. `protocol/protocol.mts`
@@ -142,6 +154,8 @@ export interface ProtocolApi {
 
 export interface DiscoveryApi {
   discover(options?: DiscoverOptions): Promise<DiscoveredDevice[]>;
+  /** Resolve the broadcast/bind addresses discovery would use for a given base IP. */
+  resolveBroadcast(baseIp?: string): ResolvedBroadcast;
 }
 
 export interface DeviceApi {

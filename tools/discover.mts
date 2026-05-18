@@ -18,7 +18,7 @@
  *   KASA_TIMEOUT_MS=5000 KASA_PORT=9999 npm run discover
  */
 import { createKasaApi } from "../src/index.mts";
-import { resolveBroadcast } from "../src/lib/network.mts";
+import { resolveBroadcast } from "../src/api/discovery/discovery.mts";
 import type { DiscoverOptions } from "../src/lib/types.mts";
 
 interface CliArgs {
@@ -53,32 +53,41 @@ function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
+    /** Consume and return the value that must follow a `--flag`. */
+    const value = (): string => {
+      const next = argv[++i];
+      if (next === undefined) {
+        console.error(`Missing value for ${a}\n\n${USAGE}`);
+        process.exit(2);
+      }
+      return next;
+    };
     if (a === "-h" || a === "--help") {
       args.help = true;
       continue;
     }
     if (a === "--base-ip" || a === "--baseip") {
-      args.baseIp = argv[++i];
+      args.baseIp = value();
       continue;
     }
     if (a === "--broadcast") {
-      args.broadcast = argv[++i];
+      args.broadcast = value();
       continue;
     }
     if (a === "--bind") {
-      args.bindAddress = argv[++i];
+      args.bindAddress = value();
       continue;
     }
     if (a === "--port") {
-      args.port = Number(argv[++i]);
+      args.port = Number(value());
       continue;
     }
     if (a === "--timeout" || a === "--timeout-ms") {
-      args.timeoutMs = Number(argv[++i]);
+      args.timeoutMs = Number(value());
       continue;
     }
     if (a === "--max" || a === "--max-devices") {
-      args.maxDevices = Number(argv[++i]);
+      args.maxDevices = Number(value());
       continue;
     }
     // Bare positional (only one accepted) becomes baseIp.

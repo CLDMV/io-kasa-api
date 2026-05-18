@@ -5,17 +5,14 @@
  * starting from seed 0xAB. TCP frames are length-prefixed (4-byte BE);
  * UDP datagrams are not.
  *
- * This module is the only place that should touch sockets — every other
- * API module composes commands and calls `self.protocol.send(...)`.
+ * Self-contained on purpose: the cipher is inlined rather than imported
+ * from a sibling module. Slothlet transpiles each `.mts` to its own cache
+ * file, so relative imports between API modules don't resolve — and the
+ * cipher returns `Buffer`s, which slothlet's wrapper proxies (breaking
+ * `TypedArray.length`) if passed across the `self` boundary.
  */
 import { createConnection } from "node:net";
 import { createSocket } from "node:dgram";
-import {
-  encryptTcp as cipherEncryptTcp,
-  decryptTcp as cipherDecryptTcp,
-  encryptUdp as cipherEncryptUdp,
-  decryptUdp as cipherDecryptUdp
-} from "../../lib/cipher.mjs";
 import type {
   DeviceTarget,
   KasaCommand,
@@ -24,12 +21,67 @@ import type {
 
 const DEFAULT_PORT = 9999;
 const DEFAULT_TIMEOUT_MS = 5000;
+const XOR_SEED = 0xab;
 const MAX_FRAME_BYTES = 1 << 20;
 
-export const encryptTcp = cipherEncryptTcp;
-export const decryptTcp = cipherDecryptTcp;
-export const encryptUdp = cipherEncryptUdp;
-export const decryptUdp = cipherDecryptUdp;
+/** TCP encryption — autokey-XOR body prefixed with a 4-byte big-endian length. */
+export function encryptTcp(data: string): Buffer {
+  const payload = Buffer.from(data, "utf8");
+  const body = Buffer.alloc(payload.length);
+  let key = XOR_SEED;
+  for (let i = 0; i < payload.length; i++) {
+    const c = key ^ (payload[i] as number);
+    body[i] = c;
+    key = c;
+  }
+  const out = Buffer.alloc(4 + body.length);
+  out.writeUInt32BE(body.length, 0);
+  body.copy(out, 4);
+  return out;
+}
+
+/** TCP decryption — accepts the full length-prefixed frame. */
+export function decryptTcp(frame: Buffer): string {
+  if (frame.length < 4) throw new Error("Kasa TCP frame too short");
+  const declared = frame.readUInt32BE(0);
+  const body = frame.subarray(4, 4 + declared);
+  if (body.length !== declared) {
+    throw new Error(`Kasa TCP frame truncated: expected ${declared} bytes, got ${body.length}`);
+  }
+  const out = Buffer.alloc(body.length);
+  let key = XOR_SEED;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i] as number;
+    out[i] = key ^ c;
+    key = c;
+  }
+  return out.toString("utf8");
+}
+
+/** UDP encryption — same autokey cipher, no length prefix. */
+export function encryptUdp(data: string): Buffer {
+  const payload = Buffer.from(data, "utf8");
+  const out = Buffer.alloc(payload.length);
+  let key = XOR_SEED;
+  for (let i = 0; i < payload.length; i++) {
+    const c = key ^ (payload[i] as number);
+    out[i] = c;
+    key = c;
+  }
+  return out;
+}
+
+/** UDP decryption — inverse of {@link encryptUdp}. */
+export function decryptUdp(payload: Buffer): string {
+  const out = Buffer.alloc(payload.length);
+  let key = XOR_SEED;
+  for (let i = 0; i < payload.length; i++) {
+    const c = payload[i] as number;
+    out[i] = key ^ c;
+    key = c;
+  }
+  return out.toString("utf8");
+}
 
 function parseJson(raw: string): KasaResponse {
   try {
@@ -47,7 +99,7 @@ export async function send(target: DeviceTarget, command: KasaCommand): Promise<
   const host = target.host;
   const port = target.port ?? DEFAULT_PORT;
   const timeoutMs = target.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const frame = cipherEncryptTcp(JSON.stringify(command));
+  const frame = encryptTcp(JSON.stringify(command));
 
   return await new Promise<KasaResponse>((resolve, reject) => {
     const socket = createConnection({ host, port });
@@ -81,7 +133,7 @@ export async function send(target: DeviceTarget, command: KasaCommand): Promise<
       if (expected !== null && received >= 4 + expected) {
         const full = Buffer.concat(chunks, received);
         try {
-          settle(null, parseJson(cipherDecryptTcp(full)));
+          settle(null, parseJson(decryptTcp(full)));
         } catch (err) {
           settle(err as Error);
         }
@@ -105,7 +157,7 @@ export async function sendUdp(target: DeviceTarget, command: KasaCommand): Promi
   const host = target.host;
   const port = target.port ?? DEFAULT_PORT;
   const timeoutMs = target.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const payload = cipherEncryptUdp(JSON.stringify(command));
+  const payload = encryptUdp(JSON.stringify(command));
 
   return await new Promise<KasaResponse>((resolve, reject) => {
     const socket = createSocket("udp4");
@@ -124,7 +176,7 @@ export async function sendUdp(target: DeviceTarget, command: KasaCommand): Promi
     socket.on("message", (msg, rinfo) => {
       if (rinfo.address !== host) return;
       try {
-        settle(null, parseJson(cipherDecryptUdp(msg)));
+        settle(null, parseJson(decryptUdp(msg)));
       } catch (err) {
         settle(err as Error);
       }

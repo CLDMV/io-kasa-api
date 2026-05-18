@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveBroadcast } from "../src/lib/network.mts";
+import { resolveBroadcast } from "../src/api/discovery/discovery.mts";
 
 /** @typedef {import("node:os").NetworkInterfaceInfo} NIInfo */
 
