@@ -34,7 +34,7 @@ type AnyApi = {
 		discover(options?: Record<string, unknown>): Promise<DiscoveredDevice[]>;
 		sweep(cidr: string, options?: Record<string, unknown>): Promise<DiscoveredDevice[]>;
 	};
-	bulk: { device: { getSysInfo(targets: DeviceTarget[]): Promise<Array<OpResult<SysInfo>>> } };
+	bulk: { device: { info: { get(targets: DeviceTarget[]): Promise<Array<OpResult<SysInfo>>> } } };
 };
 
 /**
@@ -62,7 +62,7 @@ export function buildSignal(api: AnyApi): SignalApi {
 
 			// Bulk-read sysinfo (per-device timeout pinned).
 			const probed = targets.map((t) => ({ ...t, timeoutMs }));
-			const results = await api.bulk.device.getSysInfo(probed);
+			const results = await api.bulk.device.info.get(probed);
 
 			const entries: SignalEntry[] = results.map((r) => {
 				const info = r.value ?? {};

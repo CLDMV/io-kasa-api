@@ -61,8 +61,8 @@ class KasaDeviceMonitor extends EventEmitter {
 	async #tick(): Promise<void> {
 		if (this.#stopped) return;
 		try {
-			// getSysInfo never throws — it resolves to an OpResult.
-			const result = await self.device.getSysInfo(this.#target);
+			// info.get never throws — it resolves to an OpResult.
+			const result = await self.device.info.get(this.#target);
 			if (!result.ok || !result.value) {
 				// Transient unreachability shouldn't kill the watcher — report and keep polling.
 				this.emit("error", new Error(result.error ?? "poll failed"));

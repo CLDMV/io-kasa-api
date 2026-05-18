@@ -371,80 +371,160 @@ export interface EventsApi {
 	run<T>(op: string, target: DeviceTarget, args: unknown[], work: () => Promise<T> | T): Promise<OpResult<T>>;
 }
 
-export interface DeviceApi {
-	getSysInfo(target: DeviceTarget): Promise<OpResult<SysInfo>>;
-	setAlias(target: DeviceTarget, alias: string): Promise<OpResult>;
-	reboot(target: DeviceTarget, delaySec?: number): Promise<OpResult>;
-	setLedOff(target: DeviceTarget, off: boolean): Promise<OpResult>;
+/** Read-only resource leaf. */
+export interface ResourceGet<T> {
+	get(target: DeviceTarget): Promise<OpResult<T>>;
 }
 
+/** A scalar resource leaf with a single-argument setter (`get` may be derived). */
+export interface ScalarResource<T, A = T> {
+	get(target: DeviceTarget): Promise<OpResult<T>>;
+	set(target: DeviceTarget, value: A): Promise<OpResult>;
+}
+
+/** Generic device commands, addressed as resources. */
+export interface DeviceApi {
+	/** Full device system information. */
+	info: ResourceGet<SysInfo>;
+	/** Device alias / display name. */
+	alias: ScalarResource<string | undefined, string>;
+	/** Status LED — `get`/`set` are in terms of LED-on (the device stores `led_off`). */
+	led: ScalarResource<boolean>;
+	/** Reboot the device after an optional delay (default 1s). */
+	reboot(target: DeviceTarget, delaySec?: number): Promise<OpResult>;
+}
+
+/** Smart-plug relay control. */
 export interface PlugApi {
+	/** Relay power state. `set` routes to `on`/`off`. */
+	power: ScalarResource<0 | 1, boolean>;
 	on(target: DeviceTarget): Promise<OpResult>;
 	off(target: DeviceTarget): Promise<OpResult>;
 	toggle(target: DeviceTarget): Promise<OpResult<0 | 1>>;
-	getState(target: DeviceTarget): Promise<OpResult<0 | 1>>;
-	setState(target: DeviceTarget, on: boolean): Promise<OpResult>;
-	/** Per-outlet control for multi-outlet strips like HS300. `childIds` are the device IDs of the outlets. */
-	setChildState(target: DeviceTarget, childIds: string[], on: boolean): Promise<OpResult>;
+	/** Per-outlet control for multi-outlet strips (HS300, KP200). */
+	children: {
+		set(target: DeviceTarget, childIds: string[], on: boolean): Promise<OpResult>;
+	};
 }
 
 /** Wall light-switch control. Protocol-identical to {@link PlugApi}. */
 export interface SwitchApi {
+	/** Relay power state. `set` routes to `on`/`off`. */
+	power: ScalarResource<0 | 1, boolean>;
 	on(target: DeviceTarget): Promise<OpResult>;
 	off(target: DeviceTarget): Promise<OpResult>;
-	setState(target: DeviceTarget, on: boolean): Promise<OpResult>;
-	getState(target: DeviceTarget): Promise<OpResult<0 | 1>>;
 	toggle(target: DeviceTarget): Promise<OpResult<0 | 1>>;
 }
 
-/** Dimmer-switch brightness/ramp control (HS220, KS220, KS230). On/off is via {@link SwitchApi}. */
+/** Dimmer-switch control (HS220, KS220, KS230, ES20M). On/off is via `plug`/`switch`. */
 export interface DimmerApi {
-	setBrightness(target: DeviceTarget, brightness: number): Promise<OpResult>;
-	setBrightnessTransition(target: DeviceTarget, brightness: number, durationMs: number, mode?: string): Promise<OpResult>;
-	getParameters(target: DeviceTarget): Promise<OpResult<DimmerParameters>>;
-	setFadeOnTime(target: DeviceTarget, ms: number): Promise<OpResult>;
-	setFadeOffTime(target: DeviceTarget, ms: number): Promise<OpResult>;
-	setGentleOnTime(target: DeviceTarget, ms: number): Promise<OpResult>;
-	setGentleOffTime(target: DeviceTarget, ms: number): Promise<OpResult>;
-	setDoubleClickAction(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<OpResult>;
-	setLongPressAction(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<OpResult>;
+	/** Brightness 1..100. `set` takes an optional fade duration (ms). */
+	brightness: {
+		get(target: DeviceTarget): Promise<OpResult<number | undefined>>;
+		set(target: DeviceTarget, level: number, durationMs?: number): Promise<OpResult>;
+	};
+	/** Full dimmer tuning block. */
+	parameters: ResourceGet<DimmerParameters>;
+	/** Hard fade ramp times (ms). */
+	fade: {
+		on: ScalarResource<number | undefined, number>;
+		off: ScalarResource<number | undefined, number>;
+	};
+	/** Gentle (slow) ramp times (ms). */
+	gentle: {
+		on: ScalarResource<number | undefined, number>;
+		off: ScalarResource<number | undefined, number>;
+	};
+	/** Physical double-click action. */
+	doubleClick: {
+		set(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<OpResult>;
+	};
+	/** Physical long-press action. */
+	longPress: {
+		set(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<OpResult>;
+	};
 }
 
-/** Motion (PIR) and ambient-light (LAS) sensor configuration on motion switches (KS200M, KS220M). */
+/** Motion (PIR) and ambient-light (LAS) sensors on motion switches (KS200M, KS220M, ES20M). */
 export interface MotionApi {
-	getPirConfig(target: DeviceTarget): Promise<OpResult<PirConfig>>;
-	setPirEnabled(target: DeviceTarget, enabled: boolean): Promise<OpResult>;
-	setPirSensitivity(target: DeviceTarget, index: number): Promise<OpResult>;
-	setPirCooldown(target: DeviceTarget, ms: number): Promise<OpResult>;
-	getPirAdc(target: DeviceTarget): Promise<OpResult<number>>;
-	getAmbientConfig(target: DeviceTarget): Promise<OpResult<AmbientLightConfig>>;
-	setAmbientEnabled(target: DeviceTarget, enabled: boolean): Promise<OpResult>;
-	setDarkThreshold(target: DeviceTarget, index: number): Promise<OpResult>;
+	pir: {
+		/** Full PIR config. */
+		get(target: DeviceTarget): Promise<OpResult<PirConfig>>;
+		/** Enable / disable the motion sensor. */
+		set(target: DeviceTarget, enabled: boolean): Promise<OpResult>;
+		/** Motion-sensitivity preset index. */
+		sensitivity: ScalarResource<number | undefined, number>;
+		/** Re-arm cooldown (ms) after a trigger. */
+		cooldown: ScalarResource<number | undefined, number>;
+		/** Live ADC reading — a real device call, not derived from `pir.get`. */
+		adc: ResourceGet<number>;
+	};
+	ambient: {
+		/** Full ambient-light (LAS) config. */
+		get(target: DeviceTarget): Promise<OpResult<AmbientLightConfig>>;
+		/** Ambient-light gating on/off. */
+		enabled: ScalarResource<boolean>;
+		/** Darkness-threshold preset index. */
+		darkThreshold: ScalarResource<number | undefined, number>;
+	};
 }
 
+/** Smart-bulb control (LB-series, KL-series). */
 export interface BulbApi {
+	/** Full light state. */
+	state: {
+		get(target: DeviceTarget): Promise<OpResult<LightState>>;
+		set(target: DeviceTarget, state: Partial<LightState>): Promise<OpResult<LightState>>;
+	};
+	/** On/off state. `set` routes to `on`/`off`. */
+	power: ScalarResource<boolean>;
 	on(target: DeviceTarget, transitionMs?: number): Promise<OpResult>;
 	off(target: DeviceTarget, transitionMs?: number): Promise<OpResult>;
-	getLightState(target: DeviceTarget): Promise<OpResult<LightState>>;
-	setLightState(target: DeviceTarget, state: Partial<LightState>): Promise<OpResult<LightState>>;
-	setBrightness(target: DeviceTarget, brightness: number, transitionMs?: number): Promise<OpResult>;
-	setColor(target: DeviceTarget, hsv: { hue: number; saturation: number; value?: number }, transitionMs?: number): Promise<OpResult>;
-	setColorTemp(target: DeviceTarget, kelvin: number, transitionMs?: number): Promise<OpResult>;
+	/** Brightness 1..100. `set` takes an optional transition (ms). */
+	brightness: {
+		get(target: DeviceTarget): Promise<OpResult<number | undefined>>;
+		set(target: DeviceTarget, level: number, transitionMs?: number): Promise<OpResult>;
+	};
+	/** Color as HSV. `set`'s `value` is brightness (defaults 100). */
+	color: {
+		get(target: DeviceTarget): Promise<OpResult<{ hue: number; saturation: number; value: number }>>;
+		set(
+			target: DeviceTarget,
+			hsv: { hue: number; saturation: number; value?: number },
+			transitionMs?: number
+		): Promise<OpResult>;
+	};
+	/** White color temperature in Kelvin. */
+	colorTemp: {
+		get(target: DeviceTarget): Promise<OpResult<number | undefined>>;
+		set(target: DeviceTarget, kelvin: number, transitionMs?: number): Promise<OpResult>;
+	};
 }
 
+/** Energy monitoring (HS110, HS300, KP115, KP125). */
 export interface EnergyApi {
-	getRealtime(target: DeviceTarget): Promise<OpResult<EnergyRealtime>>;
-	/** Daily statistics for a given month/year. */
-	getDayStats(target: DeviceTarget, year: number, month: number): Promise<OpResult<Array<Record<string, number>>>>;
-	/** Monthly statistics for a given year. */
-	getMonthStats(target: DeviceTarget, year: number): Promise<OpResult<Array<Record<string, number>>>>;
-	/** Erase the cumulative counters. */
-	eraseStats(target: DeviceTarget): Promise<OpResult>;
+	/** Instantaneous voltage / current / power reading. */
+	realtime: ResourceGet<EnergyRealtime>;
+	/** Historical energy statistics. */
+	stats: {
+		daily: {
+			get(target: DeviceTarget, year: number, month: number): Promise<OpResult<Array<Record<string, number>>>>;
+		};
+		monthly: {
+			get(target: DeviceTarget, year: number): Promise<OpResult<Array<Record<string, number>>>>;
+		};
+		/** Wipe the device's cumulative counters. Irreversible. */
+		erase(target: DeviceTarget): Promise<OpResult>;
+	};
 }
 
+/** On-device schedule (timer) rules. */
 export interface ScheduleApi {
-	getRules(target: DeviceTarget): Promise<OpResult<unknown>>;
-	deleteAllRules(target: DeviceTarget): Promise<OpResult>;
+	rules: {
+		get(target: DeviceTarget): Promise<OpResult<unknown>>;
+		/** Remove every schedule rule. */
+		clear(target: DeviceTarget): Promise<OpResult>;
+	};
 }
 
 /** Poll-based device monitoring — detect when a device turns on/off. */
@@ -454,13 +534,17 @@ export interface MonitorApi {
 }
 
 /**
- * Turn a single-device command interface into its bulk twin: the first
- * `target` parameter becomes `targets[]` and the result becomes an array.
+ * Turn a single-device command tree into its bulk twin, recursively: every
+ * leaf `(target, ...rest) => Promise<OpResult<V>>` becomes
+ * `(targets[], ...rest) => Promise<OpResult<V>[]>`; nested resource objects
+ * are mirrored in place.
  */
 export type Bulkified<M> = {
 	[K in keyof M]: M[K] extends (target: DeviceTarget, ...rest: infer R) => Promise<OpResult<infer V>>
 		? (targets: DeviceTarget[], ...rest: R) => Promise<Array<OpResult<V>>>
-		: never;
+		: M[K] extends object
+			? Bulkified<M[K]>
+			: M[K];
 };
 
 /**

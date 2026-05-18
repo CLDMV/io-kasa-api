@@ -1,17 +1,17 @@
 /**
  * Dynamic bulk layer.
  *
- * Rather than hand-writing a bulk variant of every command, `buildBulk` walks
- * the built API and mirrors each device-command module: `api.bulk.plug.on` is
- * generated from `api.plug.on`. The first `target` parameter becomes a
- * `targets[]`, the rest forward unchanged, probes run with bounded concurrency,
- * and the result is one `OpResult` per device.
+ * `buildBulk` walks the built API and mirrors every device-command module —
+ * recursing the nested resource tree — so `api.bulk.motion.pir.sensitivity.set`
+ * is generated from `api.motion.pir.sensitivity.set`. At each leaf the first
+ * `target` parameter becomes a `targets[]`, the rest forward unchanged, probes
+ * run with bounded concurrency, and the result is one `OpResult` per device.
  *
  * Because every single command already emits its own event, a bulk call fires
  * N events — correlate them by `OpResult.target` / `OpEvent.target`.
  *
- * This file is imported by `index.mts` (the entry), not loaded by slothlet, so
- * the relative `./types.mts` import resolves normally.
+ * Imported by `index.mts` (the entry), not loaded by slothlet, so the relative
+ * `./types.mts` import resolves normally.
  */
 import type { BulkApi, DeviceTarget, OpResult } from "./types.mts";
 
@@ -34,7 +34,29 @@ async function pool<I, O>(items: I[], limit: number, worker: (item: I) => Promis
 	return out;
 }
 
-type AnyApi = Record<string, Record<string, unknown>>;
+type Leaf = (target: DeviceTarget, ...rest: unknown[]) => Promise<OpResult>;
+type Node = Record<string, unknown>;
+
+/** Recursively mirror a resource node: functions become bulk runners, objects recurse. */
+function mirror(node: Node, concurrency: number, path: string): Node {
+	const out: Node = {};
+	for (const key of Object.keys(node)) {
+		const value = node[key];
+		const childPath = `${path}.${key}`;
+		if (typeof value === "function") {
+			const fn = value as Leaf;
+			out[key] = (targets: DeviceTarget[], ...rest: unknown[]): Promise<OpResult[]> => {
+				if (!Array.isArray(targets)) {
+					throw new TypeError(`api.bulk.${childPath}: first argument must be a DeviceTarget[]`);
+				}
+				return pool(targets, concurrency, (t) => fn(t, ...rest));
+			};
+		} else if (value && typeof value === "object") {
+			out[key] = mirror(value as Node, concurrency, childPath);
+		}
+	}
+	return out;
+}
 
 /**
  * Build the `api.bulk.*` tree from the live API object.
@@ -42,29 +64,11 @@ type AnyApi = Record<string, Record<string, unknown>>;
  * @param api - The slothlet-built API (must expose the device-command modules).
  * @param concurrency - Default in-flight probe count for every bulk call.
  */
-export function buildBulk(api: AnyApi, concurrency: number = DEFAULT_CONCURRENCY): BulkApi {
-	const bulk: Record<string, Record<string, unknown>> = {};
-
+export function buildBulk(api: Record<string, Node>, concurrency: number = DEFAULT_CONCURRENCY): BulkApi {
+	const bulk: Record<string, Node> = {};
 	for (const moduleName of BULK_MODULES) {
 		const mod = api[moduleName];
-		if (!mod) continue;
-		const bulkMod: Record<string, unknown> = {};
-
-		for (const methodName of Object.keys(mod)) {
-			const fn = mod[methodName];
-			if (typeof fn !== "function") continue;
-
-			bulkMod[methodName] = (targets: DeviceTarget[], ...rest: unknown[]): Promise<OpResult[]> => {
-				if (!Array.isArray(targets)) {
-					throw new TypeError(
-						`api.bulk.${moduleName}.${methodName}: first argument must be a DeviceTarget[]`
-					);
-				}
-				return pool(targets, concurrency, (t) => (fn as (...a: unknown[]) => Promise<OpResult>)(t, ...rest));
-			};
-		}
-		bulk[moduleName] = bulkMod;
+		if (mod) bulk[moduleName] = mirror(mod, concurrency, moduleName);
 	}
-
 	return bulk as unknown as BulkApi;
 }

@@ -1,17 +1,15 @@
 /**
- * Smart-plug / smart-switch relay control.
+ * Smart-plug relay control, addressed as nested resources:
+ *   plug.power.{get,set} · plug.on() · plug.off() · plug.toggle() · plug.children.set()
  *
- * Works for HS100, HS103, HS105, HS110, HS200, HS210, HS300 (via child ids),
- * and the KP-series plugs that still speak the legacy port-9999 protocol.
- *
- * Every command resolves to an `OpResult` and never throws.
+ * `power.set(bool)` is a thin router to `on`/`off` — the real op (and event)
+ * is `plug.on` / `plug.off`. Every command resolves to an `OpResult`.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type { DeviceTarget, OpResult, SelfApi } from "../../lib/types.mts";
+import type { DeviceTarget, OpResult, PlugApi, SelfApi } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 
-/** Throw on a non-zero `err_code` (caught by `run`); otherwise return the result. */
 function checkError(result: unknown, op: string): unknown {
 	if (result && typeof result === "object" && "err_code" in result) {
 		const code = (result as { err_code: number }).err_code;
@@ -23,19 +21,19 @@ function checkError(result: unknown, op: string): unknown {
 	return result;
 }
 
-/** Raw relay write — no event wrapping; used inside `run`. */
+/** Raw relay write — no event wrapping. */
 async function sendRelay(target: DeviceTarget, state: 0 | 1, childIds?: string[]): Promise<unknown> {
 	const command: Record<string, Record<string, unknown>> = { system: { set_relay_state: { state } } };
 	if (childIds && childIds.length > 0) command.context = { child_ids: childIds };
 	const response = await self.protocol.send(target, command);
-	return checkError(response.system?.set_relay_state, "plug.setState");
+	return checkError(response.system?.set_relay_state, "plug relay");
 }
 
-/** Raw relay read — no event wrapping; used inside `run`. */
+/** Raw relay read — no event wrapping. */
 async function readState(target: DeviceTarget): Promise<0 | 1> {
 	const response = await self.protocol.send(target, { system: { get_sysinfo: {} } });
-	const info = response.system?.get_sysinfo as { relay_state?: 0 | 1 } | undefined;
-	if (info?.relay_state === 0 || info?.relay_state === 1) return info.relay_state;
+	const sysInfo = response.system?.get_sysinfo as { relay_state?: 0 | 1 } | undefined;
+	if (sysInfo?.relay_state === 0 || sysInfo?.relay_state === 1) return sysInfo.relay_state;
 	throw new Error(`Device at ${target.host} did not report a relay_state`);
 }
 
@@ -49,16 +47,6 @@ export function off(target: DeviceTarget): Promise<OpResult> {
 	return self.events.run("plug.off", target, [], () => sendRelay(target, 0));
 }
 
-/** Set the outlet's relay state explicitly. */
-export function setState(target: DeviceTarget, isOn: boolean): Promise<OpResult> {
-	return self.events.run("plug.setState", target, [isOn], () => sendRelay(target, isOn ? 1 : 0));
-}
-
-/** Read the current relay state without modifying it. */
-export function getState(target: DeviceTarget): Promise<OpResult<0 | 1>> {
-	return self.events.run("plug.getState", target, [], () => readState(target));
-}
-
 /** Read the current state then flip it. `value` is the new state. */
 export function toggle(target: DeviceTarget): Promise<OpResult<0 | 1>> {
 	return self.events.run("plug.toggle", target, [], async () => {
@@ -69,13 +57,17 @@ export function toggle(target: DeviceTarget): Promise<OpResult<0 | 1>> {
 	});
 }
 
-/**
- * Set state on a specific subset of outlets on a multi-outlet strip (HS300).
- * The `childIds` are the full IDs from `sysInfo.children[].id`.
- */
-export function setChildState(target: DeviceTarget, childIds: string[], isOn: boolean): Promise<OpResult> {
-	return self.events.run("plug.setChildState", target, [childIds, isOn], () => {
-		if (childIds.length === 0) throw new Error("setChildState requires at least one child id");
-		return sendRelay(target, isOn ? 1 : 0, childIds);
-	});
-}
+/** Relay power state. `set` routes to `on`/`off`, so the event is `plug.on`/`plug.off`. */
+export const power: PlugApi["power"] = {
+	get: (target) => self.events.run("plug.power.get", target, [], () => readState(target)),
+	set: (target, isOn) => (isOn ? on(target) : off(target))
+};
+
+/** Per-outlet control for multi-outlet strips (HS300, KP200). */
+export const children: PlugApi["children"] = {
+	set: (target, childIds, isOn) =>
+		self.events.run("plug.children.set", target, [childIds, isOn], () => {
+			if (childIds.length === 0) throw new Error("children.set requires at least one child id");
+			return sendRelay(target, isOn ? 1 : 0, childIds);
+		})
+};

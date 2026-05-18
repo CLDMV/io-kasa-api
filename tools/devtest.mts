@@ -53,11 +53,11 @@ async function step(label: string, action: () => Promise<{ ok: boolean }>, verif
 }
 
 const stateIs = (want: 0 | 1) => async (): Promise<boolean> => {
-  const r = await api.switch.getState(target);
+  const r = await api.switch.power.get(target);
   return r.ok && r.value === want;
 };
 const brightnessIs = (want: number) => async (): Promise<boolean> => {
-  const r = await api.device.getSysInfo(target);
+  const r = await api.device.info.get(target);
   return r.ok && Number(r.value?.brightness) === want;
 };
 
@@ -68,15 +68,15 @@ await step("turn OFF", () => api.switch.off(target), stateIs(0));
 // 2. Turn it on and change its dimming.
 await step("turn ON", () => api.switch.on(target), stateIs(1));
 for (const level of [25, 50, 75]) {
-  await step(`dim to ${level}%`, () => api.dimmer.setBrightness(target, level), brightnessIs(level));
+  await step(`dim to ${level}%`, () => api.dimmer.brightness.set(target, level), brightnessIs(level));
 }
 
 // 3. Finish: on, dimmed to 100%.
 await step(
   "turn ON + dim to 100%",
-  () => api.dimmer.setBrightness(target, 100),
+  () => api.dimmer.brightness.set(target, 100),
   async () => {
-    const r = await api.device.getSysInfo(target);
+    const r = await api.device.info.get(target);
     return r.ok && r.value?.relay_state === 1 && Number(r.value?.brightness) === 100;
   }
 );

@@ -1,14 +1,12 @@
 /**
- * Schedule (timer) rules on Kasa devices.
+ * On-device schedule (timer) rules: `schedule.rules.get` · `schedule.rules.clear()`.
  *
- * The on-device schedule namespace stores rules that switch the relay/light at
- * fixed times or relative to sunrise/sunset. This module exposes the common
- * operations; full rule construction is left to callers since the shape varies.
- *
- * Every command resolves to an `OpResult` and never throws.
+ * The schedule namespace stores rules that switch the relay/light at fixed
+ * times or relative to sunrise/sunset. Rule construction varies by device and
+ * is left to callers. Every command resolves to an `OpResult`.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type { DeviceTarget, OpResult, SelfApi } from "../../lib/types.mts";
+import type { ScheduleApi, SelfApi } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 const NS = "schedule";
@@ -26,18 +24,16 @@ function unwrap<T>(response: Record<string, Record<string, unknown>>, method: st
 	return result as T;
 }
 
-/** List all schedule rules currently stored on the device. */
-export function getRules(target: DeviceTarget): Promise<OpResult<unknown>> {
-	return self.events.run("schedule.getRules", target, [], async () => {
-		const response = await self.protocol.send(target, { [NS]: { get_rules: {} } });
-		return unwrap(response, "get_rules");
-	});
-}
-
-/** Remove every schedule rule. */
-export function deleteAllRules(target: DeviceTarget): Promise<OpResult> {
-	return self.events.run("schedule.deleteAllRules", target, [], async () => {
-		const response = await self.protocol.send(target, { [NS]: { delete_all_rules: {} } });
-		return unwrap(response, "delete_all_rules");
-	});
-}
+/** Schedule rules stored on the device. */
+export const rules: ScheduleApi["rules"] = {
+	get: (target) =>
+		self.events.run("schedule.rules.get", target, [], async () => {
+			const response = await self.protocol.send(target, { [NS]: { get_rules: {} } });
+			return unwrap(response, "get_rules");
+		}),
+	clear: (target) =>
+		self.events.run("schedule.rules.clear", target, [], async () => {
+			const response = await self.protocol.send(target, { [NS]: { delete_all_rules: {} } });
+			return unwrap(response, "delete_all_rules");
+		})
+};

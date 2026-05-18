@@ -99,6 +99,8 @@ export type {
   SignalEntry,
   SignalReportOptions,
   Bulkified,
+  ResourceGet,
+  ScalarResource,
   SelfApi,
   ProtocolApi,
   DiscoveryApi,
