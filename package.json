@@ -1,0 +1,29 @@
+{
+  "name": "kasa-api",
+  "version": "0.1.0",
+  "description": "Slothlet-powered API module for controlling TP-Link Kasa IoT devices on the local network.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.mts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "discover": "node --no-warnings --experimental-strip-types tools/discover.mts"
+  },
+  "dependencies": {
+    "@cldmv/slothlet": "^3.4.1",
+    "esbuild": "^0.28.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^6.0.3",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
