@@ -61,28 +61,34 @@ class KasaDeviceMonitor extends EventEmitter {
 	async #tick(): Promise<void> {
 		if (this.#stopped) return;
 		try {
-			const sysInfo = await self.device.getSysInfo(this.#target);
-			const relayState: 0 | 1 = sysInfo.relay_state === 1 ? 1 : 0;
-			const event: MonitorEvent = {
-				host: this.#target.host,
-				relayState,
-				changedTo: null,
-				onTime: Number(sysInfo.on_time ?? 0),
-				activeMode: String(sysInfo.active_mode ?? ""),
-				triggeredBy: inferTrigger(sysInfo),
-				at: Date.now(),
-				sysInfo
-			};
-			if (this.#last === null) {
-				this.emit("state", event);
-			} else if (relayState !== this.#last) {
-				event.changedTo = relayState;
-				this.emit("change", event);
-				this.emit(relayState === 1 ? "on" : "off", event);
+			// getSysInfo never throws — it resolves to an OpResult.
+			const result = await self.device.getSysInfo(this.#target);
+			if (!result.ok || !result.value) {
+				// Transient unreachability shouldn't kill the watcher — report and keep polling.
+				this.emit("error", new Error(result.error ?? "poll failed"));
+			} else {
+				const sysInfo = result.value;
+				const relayState: 0 | 1 = sysInfo.relay_state === 1 ? 1 : 0;
+				const event: MonitorEvent = {
+					host: this.#target.host,
+					relayState,
+					changedTo: null,
+					onTime: Number(sysInfo.on_time ?? 0),
+					activeMode: String(sysInfo.active_mode ?? ""),
+					triggeredBy: inferTrigger(sysInfo),
+					at: Date.now(),
+					sysInfo
+				};
+				if (this.#last === null) {
+					this.emit("state", event);
+				} else if (relayState !== this.#last) {
+					event.changedTo = relayState;
+					this.emit("change", event);
+					this.emit(relayState === 1 ? "on" : "off", event);
+				}
+				this.#last = relayState;
 			}
-			this.#last = relayState;
 		} catch (err) {
-			// Transient unreachability shouldn't kill the watcher — report and keep polling.
 			this.emit("error", err instanceof Error ? err : new Error(String(err)));
 		} finally {
 			if (!this.#stopped) {

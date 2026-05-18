@@ -28,6 +28,47 @@ export type KasaCommand = Record<string, Record<string, unknown>>;
 /** Response from a Kasa device — same nested shape as the command. */
 export type KasaResponse = Record<string, Record<string, unknown>>;
 
+/**
+ * Result of a device command.
+ *
+ * Commands never throw — they always resolve to an `OpResult`. Check `ok`.
+ * `target`/`host` ride along so a caller firing many ops can map a result
+ * (or an event) back to the device and action it came from.
+ */
+export interface OpResult<T = unknown> {
+	/** Did the operation succeed? */
+	ok: boolean;
+	/** Operation path, e.g. `"plug.on"`. */
+	op: string;
+	/** Device the operation targeted. */
+	target: DeviceTarget;
+	/** Convenience alias for `target.host`. */
+	host: string;
+	/** Resolved value when `ok` — the device's parsed response. */
+	value?: T;
+	/** Error message when `!ok`. */
+	error?: string;
+	/** `false` when the failure was a connectivity error (timeout / refused / closed). */
+	reachable: boolean;
+	/** Wall-clock duration of the operation in ms. */
+	durationMs: number;
+}
+
+/** Payload of an `api.events` event — an {@link OpResult} plus dispatch detail. */
+export interface OpEvent<T = unknown> extends OpResult<T> {
+	/** Module name, e.g. `"plug"`. */
+	module: string;
+	/** Method name, e.g. `"on"`. */
+	method: string;
+	/** Arguments passed beyond the target. */
+	args: unknown[];
+	/** `Date.now()` when the event fired. */
+	at: number;
+}
+
+/** Listener for `api.events` operation events. */
+export type OpEventListener = (event: OpEvent) => void;
+
 /** SysInfo as returned by `system.get_sysinfo`. The schema differs slightly between models. */
 export interface SysInfo {
 	alias?: string;
@@ -237,6 +278,31 @@ export interface AmbientLightConfig {
 	[key: string]: unknown;
 }
 
+/** One device's entry in a {@link SignalApi.report}. */
+export interface SignalEntry {
+	host: string;
+	alias: string;
+	model: string;
+	/** RSSI in dBm (closer to 0 is stronger), or `null` if the device didn't answer. */
+	rssi: number | null;
+	/** Bucketed signal quality. */
+	quality: "excellent" | "good" | "fair" | "weak" | "unknown";
+	/** Whether the device responded. */
+	reachable: boolean;
+}
+
+/** Options for {@link SignalApi.report}. */
+export interface SignalReportOptions {
+	/** Scan this CIDR via unicast sweep. */
+	cidr?: string;
+	/** Or report on this explicit device list. */
+	devices?: DeviceTarget[];
+	/** Probe concurrency. Default 32. */
+	concurrency?: number;
+	/** Per-device timeout in ms. Default 1500. */
+	timeoutMs?: number;
+}
+
 /**
  * Shape of `self` inside an API module. Slothlet flattens
  * `<folder>/<folder>.mts` into a single namespace, so e.g. `protocol/protocol.mts`
@@ -245,6 +311,7 @@ export interface AmbientLightConfig {
 export interface SelfApi {
 	protocol: ProtocolApi;
 	discovery: DiscoveryApi;
+	events: EventsApi;
 	device: DeviceApi;
 	plug: PlugApi;
 	switch: SwitchApi;
@@ -277,84 +344,143 @@ export interface DiscoveryApi {
 	resolveBroadcast(baseIp?: string): ResolvedBroadcast;
 }
 
+/**
+ * Shared event bus. Every command emits, on completion:
+ *   - `"op"`      — every operation
+ *   - `"<op>"`    — that operation's path, e.g. `"plug.on"`
+ *   - `"success"` — successful operations
+ *   - `"error"`   — failed operations
+ *
+ * Commands never throw; failures arrive as `"error"` events and as
+ * `OpResult` return values with `ok: false`.
+ */
+export interface EventsApi {
+	/** Subscribe to an event. */
+	on(event: string, listener: OpEventListener): void;
+	/** Subscribe to an event once. */
+	once(event: string, listener: OpEventListener): void;
+	/** Unsubscribe. */
+	off(event: string, listener: OpEventListener): void;
+	/** The underlying EventEmitter, for advanced use. */
+	emitter: EventEmitter;
+	/**
+	 * Run a unit of work as a tracked operation: executes `work`, captures
+	 * success/failure into an {@link OpResult} (never throws), emits events,
+	 * and returns the result. Used internally by every command.
+	 */
+	run<T>(op: string, target: DeviceTarget, args: unknown[], work: () => Promise<T> | T): Promise<OpResult<T>>;
+}
+
 export interface DeviceApi {
-	getSysInfo(target: DeviceTarget): Promise<SysInfo>;
-	setAlias(target: DeviceTarget, alias: string): Promise<void>;
-	reboot(target: DeviceTarget, delaySec?: number): Promise<void>;
-	setLedOff(target: DeviceTarget, off: boolean): Promise<void>;
+	getSysInfo(target: DeviceTarget): Promise<OpResult<SysInfo>>;
+	setAlias(target: DeviceTarget, alias: string): Promise<OpResult>;
+	reboot(target: DeviceTarget, delaySec?: number): Promise<OpResult>;
+	setLedOff(target: DeviceTarget, off: boolean): Promise<OpResult>;
 }
 
 export interface PlugApi {
-	on(target: DeviceTarget): Promise<void>;
-	off(target: DeviceTarget): Promise<void>;
-	toggle(target: DeviceTarget): Promise<0 | 1>;
-	getState(target: DeviceTarget): Promise<0 | 1>;
-	setState(target: DeviceTarget, on: boolean): Promise<void>;
+	on(target: DeviceTarget): Promise<OpResult>;
+	off(target: DeviceTarget): Promise<OpResult>;
+	toggle(target: DeviceTarget): Promise<OpResult<0 | 1>>;
+	getState(target: DeviceTarget): Promise<OpResult<0 | 1>>;
+	setState(target: DeviceTarget, on: boolean): Promise<OpResult>;
 	/** Per-outlet control for multi-outlet strips like HS300. `childIds` are the device IDs of the outlets. */
-	setChildState(target: DeviceTarget, childIds: string[], on: boolean): Promise<void>;
+	setChildState(target: DeviceTarget, childIds: string[], on: boolean): Promise<OpResult>;
 }
 
-export interface BulbApi {
-	on(target: DeviceTarget, transitionMs?: number): Promise<void>;
-	off(target: DeviceTarget, transitionMs?: number): Promise<void>;
-	getLightState(target: DeviceTarget): Promise<LightState>;
-	setLightState(target: DeviceTarget, state: Partial<LightState>): Promise<LightState>;
-	setBrightness(target: DeviceTarget, brightness: number, transitionMs?: number): Promise<void>;
-	setColor(target: DeviceTarget, hsv: { hue: number; saturation: number; value?: number }, transitionMs?: number): Promise<void>;
-	setColorTemp(target: DeviceTarget, kelvin: number, transitionMs?: number): Promise<void>;
-}
-
-export interface EnergyApi {
-	getRealtime(target: DeviceTarget): Promise<EnergyRealtime>;
-	/** Daily statistics for a given month/year. */
-	getDayStats(target: DeviceTarget, year: number, month: number): Promise<Array<Record<string, number>>>;
-	/** Monthly statistics for a given year. */
-	getMonthStats(target: DeviceTarget, year: number): Promise<Array<Record<string, number>>>;
-	/** Erase the cumulative counters. */
-	eraseStats(target: DeviceTarget): Promise<void>;
-}
-
-export interface ScheduleApi {
-	getRules(target: DeviceTarget): Promise<unknown>;
-	deleteAllRules(target: DeviceTarget): Promise<void>;
-}
-
-/** Wall light-switch control. Protocol-identical to {@link PlugApi}; a thin alias for intent. */
+/** Wall light-switch control. Protocol-identical to {@link PlugApi}. */
 export interface SwitchApi {
-	on(target: DeviceTarget): Promise<void>;
-	off(target: DeviceTarget): Promise<void>;
-	setState(target: DeviceTarget, on: boolean): Promise<void>;
-	getState(target: DeviceTarget): Promise<0 | 1>;
-	toggle(target: DeviceTarget): Promise<0 | 1>;
+	on(target: DeviceTarget): Promise<OpResult>;
+	off(target: DeviceTarget): Promise<OpResult>;
+	setState(target: DeviceTarget, on: boolean): Promise<OpResult>;
+	getState(target: DeviceTarget): Promise<OpResult<0 | 1>>;
+	toggle(target: DeviceTarget): Promise<OpResult<0 | 1>>;
 }
 
 /** Dimmer-switch brightness/ramp control (HS220, KS220, KS230). On/off is via {@link SwitchApi}. */
 export interface DimmerApi {
-	setBrightness(target: DeviceTarget, brightness: number): Promise<void>;
-	setBrightnessTransition(target: DeviceTarget, brightness: number, durationMs: number, mode?: string): Promise<void>;
-	getParameters(target: DeviceTarget): Promise<DimmerParameters>;
-	setFadeOnTime(target: DeviceTarget, ms: number): Promise<void>;
-	setFadeOffTime(target: DeviceTarget, ms: number): Promise<void>;
-	setGentleOnTime(target: DeviceTarget, ms: number): Promise<void>;
-	setGentleOffTime(target: DeviceTarget, ms: number): Promise<void>;
-	setDoubleClickAction(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<void>;
-	setLongPressAction(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<void>;
+	setBrightness(target: DeviceTarget, brightness: number): Promise<OpResult>;
+	setBrightnessTransition(target: DeviceTarget, brightness: number, durationMs: number, mode?: string): Promise<OpResult>;
+	getParameters(target: DeviceTarget): Promise<OpResult<DimmerParameters>>;
+	setFadeOnTime(target: DeviceTarget, ms: number): Promise<OpResult>;
+	setFadeOffTime(target: DeviceTarget, ms: number): Promise<OpResult>;
+	setGentleOnTime(target: DeviceTarget, ms: number): Promise<OpResult>;
+	setGentleOffTime(target: DeviceTarget, ms: number): Promise<OpResult>;
+	setDoubleClickAction(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<OpResult>;
+	setLongPressAction(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<OpResult>;
 }
 
 /** Motion (PIR) and ambient-light (LAS) sensor configuration on motion switches (KS200M, KS220M). */
 export interface MotionApi {
-	getPirConfig(target: DeviceTarget): Promise<PirConfig>;
-	setPirEnabled(target: DeviceTarget, enabled: boolean): Promise<void>;
-	setPirSensitivity(target: DeviceTarget, index: number): Promise<void>;
-	setPirCooldown(target: DeviceTarget, ms: number): Promise<void>;
-	getPirAdc(target: DeviceTarget): Promise<number>;
-	getAmbientConfig(target: DeviceTarget): Promise<AmbientLightConfig>;
-	setAmbientEnabled(target: DeviceTarget, enabled: boolean): Promise<void>;
-	setDarkThreshold(target: DeviceTarget, index: number): Promise<void>;
+	getPirConfig(target: DeviceTarget): Promise<OpResult<PirConfig>>;
+	setPirEnabled(target: DeviceTarget, enabled: boolean): Promise<OpResult>;
+	setPirSensitivity(target: DeviceTarget, index: number): Promise<OpResult>;
+	setPirCooldown(target: DeviceTarget, ms: number): Promise<OpResult>;
+	getPirAdc(target: DeviceTarget): Promise<OpResult<number>>;
+	getAmbientConfig(target: DeviceTarget): Promise<OpResult<AmbientLightConfig>>;
+	setAmbientEnabled(target: DeviceTarget, enabled: boolean): Promise<OpResult>;
+	setDarkThreshold(target: DeviceTarget, index: number): Promise<OpResult>;
+}
+
+export interface BulbApi {
+	on(target: DeviceTarget, transitionMs?: number): Promise<OpResult>;
+	off(target: DeviceTarget, transitionMs?: number): Promise<OpResult>;
+	getLightState(target: DeviceTarget): Promise<OpResult<LightState>>;
+	setLightState(target: DeviceTarget, state: Partial<LightState>): Promise<OpResult<LightState>>;
+	setBrightness(target: DeviceTarget, brightness: number, transitionMs?: number): Promise<OpResult>;
+	setColor(target: DeviceTarget, hsv: { hue: number; saturation: number; value?: number }, transitionMs?: number): Promise<OpResult>;
+	setColorTemp(target: DeviceTarget, kelvin: number, transitionMs?: number): Promise<OpResult>;
+}
+
+export interface EnergyApi {
+	getRealtime(target: DeviceTarget): Promise<OpResult<EnergyRealtime>>;
+	/** Daily statistics for a given month/year. */
+	getDayStats(target: DeviceTarget, year: number, month: number): Promise<OpResult<Array<Record<string, number>>>>;
+	/** Monthly statistics for a given year. */
+	getMonthStats(target: DeviceTarget, year: number): Promise<OpResult<Array<Record<string, number>>>>;
+	/** Erase the cumulative counters. */
+	eraseStats(target: DeviceTarget): Promise<OpResult>;
+}
+
+export interface ScheduleApi {
+	getRules(target: DeviceTarget): Promise<OpResult<unknown>>;
+	deleteAllRules(target: DeviceTarget): Promise<OpResult>;
 }
 
 /** Poll-based device monitoring — detect when a device turns on/off. */
 export interface MonitorApi {
 	/** Start watching a device. Returns a {@link DeviceMonitor} EventEmitter; call `.stop()` to end. */
 	watch(target: DeviceTarget, options?: WatchOptions): DeviceMonitor;
+}
+
+/**
+ * Turn a single-device command interface into its bulk twin: the first
+ * `target` parameter becomes `targets[]` and the result becomes an array.
+ */
+export type Bulkified<M> = {
+	[K in keyof M]: M[K] extends (target: DeviceTarget, ...rest: infer R) => Promise<OpResult<infer V>>
+		? (targets: DeviceTarget[], ...rest: R) => Promise<Array<OpResult<V>>>
+		: never;
+};
+
+/**
+ * Dynamic bulk layer — mirrors every device-command module. Each method takes
+ * `targets[]` instead of one target, runs them with bounded concurrency, and
+ * resolves to one {@link OpResult} per device (including non-responders).
+ */
+export interface BulkApi {
+	device: Bulkified<DeviceApi>;
+	plug: Bulkified<PlugApi>;
+	switch: Bulkified<SwitchApi>;
+	dimmer: Bulkified<DimmerApi>;
+	motion: Bulkified<MotionApi>;
+	bulb: Bulkified<BulbApi>;
+	energy: Bulkified<EnergyApi>;
+	schedule: Bulkified<ScheduleApi>;
+}
+
+/** Network-health reporting. */
+export interface SignalApi {
+	/** Collect RSSI for a CIDR / device list / local broadcast, sorted best→worst. */
+	report(options?: SignalReportOptions): Promise<SignalEntry[]>;
 }

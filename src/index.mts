@@ -6,17 +6,22 @@
  * file under `.slothlet-cache/`, so cross-module `import { self } from
  * "@cldmv/slothlet/runtime"` resolves normally — no prebuild needed.
  *
+ * The `bulk` and `signal` layers are not slothlet modules — they are dynamic
+ * meta-layers built by walking the loaded API and attached here.
+ *
  * @example
  * import { createKasaApi } from "./index.mts";
  *
  * const api = await createKasaApi();
- * const devices = await api.discovery.discover();
- * for (const { host } of devices) await api.plug.on({ host });
+ * api.events.on("error", (e) => console.warn(`${e.op} @ ${e.host}: ${e.error}`));
+ * const results = await api.bulk.plug.on([{ host: "10.8.1.5" }, { host: "10.8.1.12" }]);
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import slothlet from "@cldmv/slothlet";
-import type { SelfApi } from "./lib/types.mts";
+import { buildBulk } from "./lib/bulk.mts";
+import { buildSignal } from "./lib/signal.mts";
+import type { BulkApi, SelfApi, SignalApi } from "./lib/types.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -30,10 +35,16 @@ export interface CreateKasaApiOptions {
   debug?: boolean;
   /** Extra context propagated through `@cldmv/slothlet/runtime`. */
   context?: Record<string, unknown>;
+  /** Default in-flight probe count for `api.bulk.*` calls. Defaults to 32. */
+  bulkConcurrency?: number;
 }
 
-/** The fully built Kasa API surface, plus slothlet's management handle. */
+/** The fully built Kasa API surface, plus the dynamic layers and slothlet's handle. */
 export type KasaApi = SelfApi & {
+  /** Dynamic bulk layer — `api.bulk.plug.on(targets)` etc. */
+  bulk: BulkApi;
+  /** Network-health reporting. */
+  signal: SignalApi;
   slothlet: {
     shutdown?: () => Promise<void>;
     [key: string]: unknown;
@@ -42,7 +53,7 @@ export type KasaApi = SelfApi & {
 
 /**
  * Build a Kasa API instance via slothlet's runtime TypeScript loader.
- * Each call returns an independent instance with its own context.
+ * Each call returns an independent instance with its own event bus and context.
  */
 export async function createKasaApi(options: CreateKasaApiOptions = {}): Promise<KasaApi> {
   const dir = options.dir ?? resolve(HERE, "api");
@@ -55,7 +66,12 @@ export async function createKasaApi(options: CreateKasaApiOptions = {}): Promise
     // types; cast keeps the call type-safe for the documented fields.
     ...({ typescript: true } as Record<string, unknown>)
   } as Parameters<typeof slothlet>[0]);
-  return built as unknown as KasaApi;
+
+  const api = built as unknown as KasaApi;
+  // Attach the dynamic meta-layers (built by walking the loaded API).
+  api.bulk = buildBulk(api as unknown as Record<string, Record<string, unknown>>, options.bulkConcurrency);
+  api.signal = buildSignal(api as unknown as Parameters<typeof buildSignal>[0]);
+  return api;
 }
 
 export type {
@@ -63,6 +79,9 @@ export type {
   SendOptions,
   KasaCommand,
   KasaResponse,
+  OpResult,
+  OpEvent,
+  OpEventListener,
   SysInfo,
   LightState,
   EnergyRealtime,
@@ -77,9 +96,13 @@ export type {
   WatchOptions,
   MonitorEvent,
   DeviceMonitor,
+  SignalEntry,
+  SignalReportOptions,
+  Bulkified,
   SelfApi,
   ProtocolApi,
   DiscoveryApi,
+  EventsApi,
   DeviceApi,
   PlugApi,
   SwitchApi,
@@ -88,5 +111,7 @@ export type {
   BulbApi,
   EnergyApi,
   ScheduleApi,
-  MonitorApi
+  MonitorApi,
+  BulkApi,
+  SignalApi
 } from "./lib/types.mts";

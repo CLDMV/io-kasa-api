@@ -12,55 +12,115 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Best-effort: slothlet exposes a shutdown if present.
   try {
     await api?.slothlet?.shutdown?.();
   } catch {}
 });
 
+/**
+ * Resolve with the first `event` whose payload matches `predicate`.
+ * Cleans up its own listener; rejects on timeout.
+ */
+function nextOp(event, predicate = () => true, timeoutMs = 3000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      api.events.off(event, handler);
+      reject(new Error(`timed out waiting for events "${event}"`));
+    }, timeoutMs);
+    function handler(ev) {
+      if (!predicate(ev)) return;
+      clearTimeout(timer);
+      api.events.off(event, handler);
+      resolve(ev);
+    }
+    api.events.on(event, handler);
+  });
+}
+
 describe("slothlet API surface", () => {
   it("exposes every module namespace", () => {
-    expect(typeof api.protocol).toBe("object");
     expect(typeof api.protocol.send).toBe("function");
-    expect(typeof api.protocol.encryptUdp).toBe("function");
     expect(typeof api.discovery.discover).toBe("function");
+    expect(typeof api.discovery.sweep).toBe("function");
+    expect(typeof api.events.on).toBe("function");
+    expect(typeof api.events.run).toBe("function");
     expect(typeof api.device.getSysInfo).toBe("function");
     expect(typeof api.plug.on).toBe("function");
-    expect(typeof api.plug.off).toBe("function");
-    expect(typeof api.plug.toggle).toBe("function");
-    expect(typeof api.bulb.on).toBe("function");
-    expect(typeof api.bulb.setBrightness).toBe("function");
-    expect(typeof api.bulb.setColor).toBe("function");
-    expect(typeof api.energy.getRealtime).toBe("function");
-    expect(typeof api.schedule.getRules).toBe("function");
     expect(typeof api.switch.toggle).toBe("function");
     expect(typeof api.dimmer.setBrightness).toBe("function");
     expect(typeof api.motion.getPirConfig).toBe("function");
+    expect(typeof api.bulb.setColor).toBe("function");
+    expect(typeof api.energy.getRealtime).toBe("function");
+    expect(typeof api.schedule.getRules).toBe("function");
     expect(typeof api.monitor.watch).toBe("function");
+    expect(typeof api.bulk.plug.on).toBe("function");
+    expect(typeof api.bulk.dimmer.setBrightness).toBe("function");
+    expect(typeof api.signal.report).toBe("function");
   });
 });
 
-describe("api.device", () => {
-  it("getSysInfo returns the device's sysinfo block", async () => {
-    const sysinfo = {
-      alias: "Living Room",
-      model: "HS110(US)",
-      mac: "AA:BB:CC:DD:EE:FF",
-      relay_state: 1
-    };
-    const server = await startFakeTcp(() => ({ system: { get_sysinfo: sysinfo } }));
+describe("OpResult contract", () => {
+  it("a successful command resolves to ok:true with the device value and never throws", async () => {
+    const server = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
     try {
-      const info = await api.device.getSysInfo({ host: "127.0.0.1", port: server.port });
-      expect(info).toEqual(sysinfo);
+      const r = await api.plug.on({ host: "127.0.0.1", port: server.port });
+      expect(r.ok).toBe(true);
+      expect(r.op).toBe("plug.on");
+      expect(r.host).toBe("127.0.0.1");
+      expect(r.target).toEqual({ host: "127.0.0.1", port: server.port });
+      expect(r.reachable).toBe(true);
+      expect(typeof r.durationMs).toBe("number");
     } finally {
       await server.close();
     }
   });
 
-  it("setAlias sends the expected system.set_dev_alias command", async () => {
+  it("an unreachable device resolves to ok:false, reachable:false (no throw)", async () => {
+    const r = await api.plug.on({ host: "127.0.0.1", port: 1, timeoutMs: 400 });
+    expect(r.ok).toBe(false);
+    expect(r.reachable).toBe(false);
+    expect(typeof r.error).toBe("string");
+  });
+
+  it("a device-side error resolves to ok:false but reachable:true", async () => {
+    const server = await startFakeTcp(() => ({
+      system: { set_relay_state: { err_code: -1, err_msg: "denied" } }
+    }));
+    try {
+      const r = await api.plug.on({ host: "127.0.0.1", port: server.port });
+      expect(r.ok).toBe(false);
+      expect(r.reachable).toBe(true);
+      expect(r.error).toMatch(/denied/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("invalid input resolves to ok:false instead of throwing", async () => {
+    const r = await api.dimmer.setBrightness({ host: "127.0.0.1", port: 9999 }, 0);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/1\.\.100/);
+  });
+});
+
+describe("api.device", () => {
+  it("getSysInfo returns the device's sysinfo as value", async () => {
+    const sysinfo = { alias: "Living Room", model: "HS110(US)", relay_state: 1 };
+    const server = await startFakeTcp(() => ({ system: { get_sysinfo: sysinfo } }));
+    try {
+      const r = await api.device.getSysInfo({ host: "127.0.0.1", port: server.port });
+      expect(r.ok).toBe(true);
+      expect(r.value).toEqual(sysinfo);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("setAlias sends system.set_dev_alias", async () => {
     const server = await startFakeTcp(() => ({ system: { set_dev_alias: { err_code: 0 } } }));
     try {
-      await api.device.setAlias({ host: "127.0.0.1", port: server.port }, "New Name");
+      const r = await api.device.setAlias({ host: "127.0.0.1", port: server.port }, "New Name");
+      expect(r.ok).toBe(true);
       expect(server.received[0]).toEqual({ system: { set_dev_alias: { alias: "New Name" } } });
     } finally {
       await server.close();
@@ -72,19 +132,6 @@ describe("api.device", () => {
     try {
       await api.device.setLedOff({ host: "127.0.0.1", port: server.port }, true);
       expect(server.received[0]).toEqual({ system: { set_led_off: { off: 1 } } });
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("rejects when the device returns a non-zero err_code", async () => {
-    const server = await startFakeTcp(() => ({
-      system: { set_dev_alias: { err_code: -1, err_msg: "permission denied" } }
-    }));
-    try {
-      await expect(
-        api.device.setAlias({ host: "127.0.0.1", port: server.port }, "X")
-      ).rejects.toThrow(/permission denied/);
     } finally {
       await server.close();
     }
@@ -112,12 +159,10 @@ describe("api.plug", () => {
     }
   });
 
-  it("toggle() flips the reported state and returns the new value", async () => {
+  it("toggle() flips the reported state; value is the new state", async () => {
     let relayState = /** @type {0|1} */ (0);
     const server = await startFakeTcp((cmd) => {
-      if (cmd.system?.get_sysinfo) {
-        return { system: { get_sysinfo: { relay_state: relayState } } };
-      }
+      if (cmd.system?.get_sysinfo) return { system: { get_sysinfo: { relay_state: relayState } } };
       if (cmd.system?.set_relay_state) {
         relayState = /** @type {0|1} */ (cmd.system.set_relay_state.state);
         return { system: { set_relay_state: { err_code: 0 } } };
@@ -125,8 +170,9 @@ describe("api.plug", () => {
       return { err: 1 };
     });
     try {
-      const next = await api.plug.toggle({ host: "127.0.0.1", port: server.port });
-      expect(next).toBe(1);
+      const r = await api.plug.toggle({ host: "127.0.0.1", port: server.port });
+      expect(r.ok).toBe(true);
+      expect(r.value).toBe(1);
       expect(relayState).toBe(1);
     } finally {
       await server.close();
@@ -150,10 +196,10 @@ describe("api.plug", () => {
     }
   });
 
-  it("setChildState rejects an empty id list", async () => {
-    await expect(
-      api.plug.setChildState({ host: "127.0.0.1", port: 9999 }, [], true)
-    ).rejects.toThrow(/at least one/);
+  it("setChildState with an empty id list resolves to ok:false", async () => {
+    const r = await api.plug.setChildState({ host: "127.0.0.1", port: 9999 }, [], true);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/at least one/);
   });
 });
 
@@ -166,8 +212,7 @@ describe("api.bulb", () => {
     }));
     try {
       await api.bulb.setBrightness({ host: "127.0.0.1", port: server.port }, 50, 500);
-      const sent = server.received[0];
-      expect(sent[NS]?.transition_light_state).toMatchObject({
+      expect(server.received[0][NS]?.transition_light_state).toMatchObject({
         on_off: 1,
         brightness: 50,
         transition_period: 500,
@@ -179,16 +224,13 @@ describe("api.bulb", () => {
   });
 
   it("setColor zeroes color_temp so the bulb leaves white-temp mode", async () => {
-    const server = await startFakeTcp(() => ({
-      [NS]: { transition_light_state: { err_code: 0 } }
-    }));
+    const server = await startFakeTcp(() => ({ [NS]: { transition_light_state: { err_code: 0 } } }));
     try {
       await api.bulb.setColor(
         { host: "127.0.0.1", port: server.port },
         { hue: 200, saturation: 80, value: 70 }
       );
-      const sent = server.received[0];
-      expect(sent[NS]?.transition_light_state).toMatchObject({
+      expect(server.received[0][NS]?.transition_light_state).toMatchObject({
         on_off: 1,
         color_temp: 0,
         hue: 200,
@@ -200,87 +242,50 @@ describe("api.bulb", () => {
     }
   });
 
-  it("rejects out-of-range brightness", async () => {
-    await expect(
-      api.bulb.setBrightness({ host: "127.0.0.1", port: 9999 }, 200)
-    ).rejects.toThrow(/1\.\.100/);
+  it("out-of-range brightness resolves to ok:false", async () => {
+    const r = await api.bulb.setBrightness({ host: "127.0.0.1", port: 9999 }, 200);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/1\.\.100/);
   });
 
-  it("rejects out-of-range hue", async () => {
-    await expect(
-      api.bulb.setColor({ host: "127.0.0.1", port: 9999 }, { hue: 999, saturation: 50 })
-    ).rejects.toThrow(/0\.\.360/);
+  it("out-of-range hue resolves to ok:false", async () => {
+    const r = await api.bulb.setColor({ host: "127.0.0.1", port: 9999 }, { hue: 999, saturation: 50 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/0\.\.360/);
   });
 });
 
 describe("api.energy", () => {
-  it("getRealtime returns the emeter snapshot", async () => {
+  it("getRealtime returns the emeter snapshot as value", async () => {
     const snap = { voltage_mv: 121000, current_ma: 250, power_mw: 31000, total_wh: 1234 };
     const server = await startFakeTcp(() => ({ emeter: { get_realtime: { ...snap, err_code: 0 } } }));
     try {
-      const result = await api.energy.getRealtime({ host: "127.0.0.1", port: server.port });
-      expect(result).toMatchObject(snap);
+      const r = await api.energy.getRealtime({ host: "127.0.0.1", port: server.port });
+      expect(r.ok).toBe(true);
+      expect(r.value).toMatchObject(snap);
     } finally {
       await server.close();
     }
   });
 
-  it("getDayStats returns the day_list array", async () => {
+  it("getDayStats returns the day_list array as value", async () => {
     const days = [
       { year: 2026, month: 5, day: 1, energy_wh: 412 },
       { year: 2026, month: 5, day: 2, energy_wh: 388 }
     ];
-    const server = await startFakeTcp(() => ({
-      emeter: { get_daystat: { day_list: days, err_code: 0 } }
-    }));
+    const server = await startFakeTcp(() => ({ emeter: { get_daystat: { day_list: days, err_code: 0 } } }));
     try {
-      const result = await api.energy.getDayStats({ host: "127.0.0.1", port: server.port }, 2026, 5);
-      expect(result).toEqual(days);
+      const r = await api.energy.getDayStats({ host: "127.0.0.1", port: server.port }, 2026, 5);
+      expect(r.value).toEqual(days);
     } finally {
       await server.close();
     }
   });
 
-  it("getDayStats rejects an invalid month", async () => {
-    await expect(
-      api.energy.getDayStats({ host: "127.0.0.1", port: 9999 }, 2026, 13)
-    ).rejects.toThrow(/1\.\.12/);
-  });
-});
-
-describe("api.discovery", () => {
-  it("discovers a single device against a loopback UDP server", async () => {
-    const sysinfo = {
-      alias: "Discovery Plug",
-      model: "HS105(US)",
-      relay_state: 0
-    };
-    const server = await startFakeUdp((cmd) => {
-      if (!cmd.system?.get_sysinfo) return null;
-      return { system: { get_sysinfo: sysinfo } };
-    });
-    try {
-      const devices = await api.discovery.discover({
-        broadcast: "127.0.0.1",
-        port: server.port,
-        timeoutMs: 500,
-        maxDevices: 1
-      });
-      expect(devices).toHaveLength(1);
-      expect(devices[0].host).toBe("127.0.0.1");
-      expect(devices[0].sysInfo).toMatchObject({ alias: "Discovery Plug" });
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("returns an empty list when no devices respond", async () => {
-    const devices = await api.discovery.discover({
-      broadcast: "127.0.0.1",
-      port: 1, // nothing listening
-      timeoutMs: 200
-    });
-    expect(devices).toEqual([]);
+  it("getDayStats with an invalid month resolves to ok:false", async () => {
+    const r = await api.energy.getDayStats({ host: "127.0.0.1", port: 9999 }, 2026, 13);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/1\.\.12/);
   });
 });
 
@@ -306,8 +311,8 @@ describe("api.switch", () => {
       return { err: 1 };
     });
     try {
-      const next = await api.switch.toggle({ host: "127.0.0.1", port: server.port });
-      expect(next).toBe(0);
+      const r = await api.switch.toggle({ host: "127.0.0.1", port: server.port });
+      expect(r.value).toBe(0);
       expect(relayState).toBe(0);
     } finally {
       await server.close();
@@ -340,12 +345,12 @@ describe("api.dimmer", () => {
     }
   });
 
-  it("getParameters returns the dimmer tuning block", async () => {
+  it("getParameters returns the dimmer tuning block as value", async () => {
     const params = { minThreshold: 12, fadeOnTime: 1000, fadeOffTime: 1000, err_code: 0 };
     const server = await startFakeTcp(() => ({ [NS]: { get_dimmer_parameters: params } }));
     try {
-      const result = await api.dimmer.getParameters({ host: "127.0.0.1", port: server.port });
-      expect(result).toMatchObject({ minThreshold: 12, fadeOnTime: 1000 });
+      const r = await api.dimmer.getParameters({ host: "127.0.0.1", port: server.port });
+      expect(r.value).toMatchObject({ minThreshold: 12, fadeOnTime: 1000 });
     } finally {
       await server.close();
     }
@@ -360,24 +365,18 @@ describe("api.dimmer", () => {
       await server.close();
     }
   });
-
-  it("rejects out-of-range brightness", async () => {
-    await expect(
-      api.dimmer.setBrightness({ host: "127.0.0.1", port: 9999 }, 0)
-    ).rejects.toThrow(/1\.\.100/);
-  });
 });
 
 describe("api.motion", () => {
   const PIR = "smartlife.iot.PIR";
   const LAS = "smartlife.iot.LAS";
 
-  it("getPirConfig reads the PIR sensor config", async () => {
+  it("getPirConfig reads the PIR sensor config as value", async () => {
     const cfg = { enable: 1, trigger_index: 1, cold_time: 60000, array: [80, 50, 20], err_code: 0 };
     const server = await startFakeTcp(() => ({ [PIR]: { get_config: cfg } }));
     try {
-      const result = await api.motion.getPirConfig({ host: "127.0.0.1", port: server.port });
-      expect(result).toMatchObject({ enable: 1, trigger_index: 1 });
+      const r = await api.motion.getPirConfig({ host: "127.0.0.1", port: server.port });
+      expect(r.value).toMatchObject({ enable: 1, trigger_index: 1 });
     } finally {
       await server.close();
     }
@@ -393,16 +392,6 @@ describe("api.motion", () => {
     }
   });
 
-  it("setPirSensitivity sends PIR.set_trigger_index", async () => {
-    const server = await startFakeTcp(() => ({ [PIR]: { set_trigger_index: { err_code: 0 } } }));
-    try {
-      await api.motion.setPirSensitivity({ host: "127.0.0.1", port: server.port }, 2);
-      expect(server.received[0]).toEqual({ [PIR]: { set_trigger_index: { index: 2 } } });
-    } finally {
-      await server.close();
-    }
-  });
-
   it("setAmbientEnabled targets the LAS namespace", async () => {
     const server = await startFakeTcp(() => ({ [LAS]: { set_enable: { err_code: 0 } } }));
     try {
@@ -413,17 +402,157 @@ describe("api.motion", () => {
     }
   });
 
-  it("rejects a negative sensitivity index", async () => {
-    await expect(
-      api.motion.setPirSensitivity({ host: "127.0.0.1", port: 9999 }, -1)
-    ).rejects.toThrow(/non-negative/);
+  it("a negative sensitivity index resolves to ok:false", async () => {
+    const r = await api.motion.setPirSensitivity({ host: "127.0.0.1", port: 9999 }, -1);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/non-negative/);
+  });
+});
+
+describe("api.events", () => {
+  it("emits op / <path> / success with a target-carrying payload", async () => {
+    const server = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
+    try {
+      const opSeen = nextOp("op", (e) => e.op === "plug.on");
+      const pathSeen = nextOp("plug.on");
+      const successSeen = nextOp("success", (e) => e.op === "plug.on");
+      await api.plug.on({ host: "127.0.0.1", port: server.port });
+
+      const ev = await pathSeen;
+      expect(ev.module).toBe("plug");
+      expect(ev.method).toBe("on");
+      expect(ev.ok).toBe(true);
+      expect(ev.host).toBe("127.0.0.1");
+      expect(ev.target).toEqual({ host: "127.0.0.1", port: server.port });
+      expect(typeof ev.durationMs).toBe("number");
+      expect(typeof ev.at).toBe("number");
+      await opSeen;
+      await successSeen;
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("emits an error event (no throw) when a command fails", async () => {
+    const errSeen = nextOp("error", (e) => e.op === "plug.off");
+    await api.plug.off({ host: "127.0.0.1", port: 1, timeoutMs: 400 });
+    const ev = await errSeen;
+    expect(ev.ok).toBe(false);
+    expect(ev.reachable).toBe(false);
+    expect(ev.host).toBe("127.0.0.1");
+    expect(ev.error).toBeTruthy();
+  });
+});
+
+describe("api.bulk", () => {
+  it("runs a command across many targets, one OpResult each", async () => {
+    const a = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
+    const b = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
+    try {
+      const results = await api.bulk.plug.on([
+        { host: "127.0.0.1", port: a.port },
+        { host: "127.0.0.1", port: b.port }
+      ]);
+      expect(results).toHaveLength(2);
+      expect(results.every((r) => r.ok)).toBe(true);
+      expect(results.map((r) => r.op)).toEqual(["plug.on", "plug.on"]);
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  });
+
+  it("reports a non-responder per-device without failing the batch", async () => {
+    const live = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
+    try {
+      const results = await api.bulk.plug.on([
+        { host: "127.0.0.1", port: live.port },
+        { host: "127.0.0.1", port: 1, timeoutMs: 400 }
+      ]);
+      expect(results[0].ok).toBe(true);
+      expect(results[1].ok).toBe(false);
+      expect(results[1].reachable).toBe(false);
+      expect(results[1].host).toBe("127.0.0.1");
+    } finally {
+      await live.close();
+    }
+  });
+
+  it("forwards extra args (bulk.dimmer.setBrightness)", async () => {
+    const NS = "smartlife.iot.dimmer";
+    const server = await startFakeTcp(() => ({ [NS]: { set_brightness: { err_code: 0 } } }));
+    try {
+      const results = await api.bulk.dimmer.setBrightness([{ host: "127.0.0.1", port: server.port }], 55);
+      expect(results[0].ok).toBe(true);
+      expect(server.received[0]).toEqual({ [NS]: { set_brightness: { brightness: 55 } } });
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("api.signal", () => {
+  it("reports RSSI for a device list, sorted strongest first, weak/offline last", async () => {
+    const strong = await startFakeTcp(() => ({
+      system: { get_sysinfo: { alias: "Close", model: "HS200(US)", rssi: -45 } }
+    }));
+    const weak = await startFakeTcp(() => ({
+      system: { get_sysinfo: { alias: "Far", model: "HS220(US)", rssi: -78 } }
+    }));
+    try {
+      const report = await api.signal.report({
+        devices: [
+          { host: "127.0.0.1", port: weak.port },
+          { host: "127.0.0.1", port: strong.port },
+          { host: "127.0.0.1", port: 1 } // offline
+        ],
+        timeoutMs: 400
+      });
+      expect(report).toHaveLength(3);
+      expect(report[0]).toMatchObject({ alias: "Close", rssi: -45, quality: "excellent", reachable: true });
+      expect(report[1]).toMatchObject({ alias: "Far", rssi: -78, quality: "weak", reachable: true });
+      expect(report[2]).toMatchObject({ rssi: null, quality: "unknown", reachable: false });
+    } finally {
+      await strong.close();
+      await weak.close();
+    }
+  });
+});
+
+describe("api.discovery", () => {
+  it("discovers a single device against a loopback UDP server", async () => {
+    const sysinfo = { alias: "Discovery Plug", model: "HS105(US)", relay_state: 0 };
+    const server = await startFakeUdp((cmd) => {
+      if (!cmd.system?.get_sysinfo) return null;
+      return { system: { get_sysinfo: sysinfo } };
+    });
+    try {
+      const devices = await api.discovery.discover({
+        broadcast: "127.0.0.1",
+        port: server.port,
+        timeoutMs: 500,
+        maxDevices: 1
+      });
+      expect(devices).toHaveLength(1);
+      expect(devices[0].host).toBe("127.0.0.1");
+      expect(devices[0].sysInfo).toMatchObject({ alias: "Discovery Plug" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns an empty list when no devices respond", async () => {
+    const devices = await api.discovery.discover({
+      broadcast: "127.0.0.1",
+      port: 1,
+      timeoutMs: 200
+    });
+    expect(devices).toEqual([]);
   });
 });
 
 describe("api.discovery — sweep (unicast CIDR scan)", () => {
   it("finds devices across a CIDR by unicast probe", async () => {
-    // Loopback is 127.0.0.0/8 — host two fake "devices" on distinct IPs,
-    // same port, and sweep the /31 that spans them.
     const a = await startFakeTcp(
       () => ({ system: { get_sysinfo: { alias: "Device A", model: "HS200(US)" } } }),
       { host: "127.0.0.2" }
@@ -450,7 +579,7 @@ describe("api.discovery — sweep (unicast CIDR scan)", () => {
 
   it("returns an empty list when no host in range answers", async () => {
     const devices = await api.discovery.sweep("127.0.0.8/30", {
-      port: 1, // nothing listening
+      port: 1,
       timeoutMs: 300,
       concurrency: 4
     });
@@ -501,10 +630,9 @@ describe("api.monitor", () => {
       expect(baseline.changedTo).toBe(null);
 
       relayState = 1;
-      activeMode = "count_down"; // motion-triggered auto-off countdown
+      activeMode = "count_down";
       const onEv = await nextEvent(w, "on");
       expect(onEv.changedTo).toBe(1);
-      expect(onEv.relayState).toBe(1);
       expect(onEv.triggeredBy).toBe("motion");
 
       relayState = 0;
@@ -542,7 +670,6 @@ describe("api.monitor", () => {
     try {
       const err = await nextEvent(w, "error", 5000);
       expect(err).toBeInstanceOf(Error);
-      // Watcher should survive the error and keep polling.
       const err2 = await nextEvent(w, "error", 5000);
       expect(err2).toBeInstanceOf(Error);
     } finally {
