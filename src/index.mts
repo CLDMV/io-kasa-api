@@ -74,6 +74,9 @@ export type {
   DimmerParameters,
   PirConfig,
   AmbientLightConfig,
+  WatchOptions,
+  MonitorEvent,
+  DeviceMonitor,
   SelfApi,
   ProtocolApi,
   DiscoveryApi,
@@ -84,5 +87,6 @@ export type {
   MotionApi,
   BulbApi,
   EnergyApi,
-  ScheduleApi
+  ScheduleApi,
+  MonitorApi
 } from "./lib/types.mts";

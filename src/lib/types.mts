@@ -4,6 +4,7 @@
  * These types are used both by the API modules (for typing `self` from
  * `@cldmv/slothlet/runtime`) and by external consumers of the built API.
  */
+import type { EventEmitter } from "node:events";
 
 /** Connection target for a Kasa device on the local network. */
 export interface DeviceTarget {
@@ -138,6 +139,51 @@ export interface ResolvedBroadcast {
 	cidr: number;
 }
 
+/** Options for {@link MonitorApi.watch}. */
+export interface WatchOptions {
+	/** Poll interval in ms. Default 2000; floored at 250. */
+	intervalMs?: number;
+}
+
+/** A device state event emitted by a {@link DeviceMonitor}. */
+export interface MonitorEvent {
+	/** Device host that produced the event. */
+	host: string;
+	/** Relay state at this poll (1 = on, 0 = off). */
+	relayState: 0 | 1;
+	/** The transition direction, or `null` for the initial baseline `"state"` event. */
+	changedTo: 0 | 1 | null;
+	/** Seconds the relay has been on (0 when off). Small value = freshly turned on. */
+	onTime: number;
+	/** Device `active_mode` (e.g. "none", "count_down"). */
+	activeMode: string;
+	/**
+	 * Best-effort cause of an on-transition. Heuristic from `active_mode`:
+	 * a running auto-off countdown implies the motion sensor fired.
+	 */
+	triggeredBy: "motion" | "manual" | "unknown";
+	/** `Date.now()` of the poll. */
+	at: number;
+	/** Full raw sysinfo from the poll. */
+	sysInfo: SysInfo;
+}
+
+/**
+ * Poll-based device watcher. An `EventEmitter` that emits:
+ *   - `"state"`  once — the initial reading (`changedTo` is `null`)
+ *   - `"on"`     when the relay goes 0→1
+ *   - `"off"`    when the relay goes 1→0
+ *   - `"change"` on either transition
+ *   - `"error"`  on a failed poll (polling continues)
+ *   - `"stop"`   when {@link DeviceMonitor.stop} is called
+ *
+ * Listener payload is a {@link MonitorEvent} (except `"error"` → `Error`).
+ */
+export interface DeviceMonitor extends EventEmitter {
+	/** Stop polling. Emits `"stop"`. Idempotent. */
+	stop(): void;
+}
+
 /** Button-action mode for a dimmer's double-click / long-press. Devices may report others. */
 export type DimmerActionMode = "none" | "instant_on_off" | "gentle_on_off" | "preset" | (string & {});
 
@@ -207,6 +253,7 @@ export interface SelfApi {
 	bulb: BulbApi;
 	energy: EnergyApi;
 	schedule: ScheduleApi;
+	monitor: MonitorApi;
 }
 
 export interface ProtocolApi {
@@ -304,4 +351,10 @@ export interface MotionApi {
 	getAmbientConfig(target: DeviceTarget): Promise<AmbientLightConfig>;
 	setAmbientEnabled(target: DeviceTarget, enabled: boolean): Promise<void>;
 	setDarkThreshold(target: DeviceTarget, index: number): Promise<void>;
+}
+
+/** Poll-based device monitoring — detect when a device turns on/off. */
+export interface MonitorApi {
+	/** Start watching a device. Returns a {@link DeviceMonitor} EventEmitter; call `.stop()` to end. */
+	watch(target: DeviceTarget, options?: WatchOptions): DeviceMonitor;
 }

@@ -36,6 +36,7 @@ describe("slothlet API surface", () => {
     expect(typeof api.switch.toggle).toBe("function");
     expect(typeof api.dimmer.setBrightness).toBe("function");
     expect(typeof api.motion.getPirConfig).toBe("function");
+    expect(typeof api.monitor.watch).toBe("function");
   });
 });
 
@@ -462,5 +463,103 @@ describe("api.discovery — sweep (unicast CIDR scan)", () => {
 
   it("rejects a malformed CIDR", async () => {
     await expect(api.discovery.sweep("10.8.1.0")).rejects.toThrow(/Invalid CIDR/);
+  });
+});
+
+describe("api.monitor", () => {
+  /** Resolve with the first payload of `event`, or reject on timeout. */
+  const nextEvent = (emitter, event, timeoutMs = 2000) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        emitter.off(event, onEvent);
+        reject(new Error(`timed out waiting for "${event}"`));
+      }, timeoutMs);
+      function onEvent(payload) {
+        clearTimeout(timer);
+        resolve(payload);
+      }
+      emitter.once(event, onEvent);
+    });
+
+  it("emits a baseline state event, then on/off transitions", async () => {
+    let relayState = 0;
+    let activeMode = "none";
+    const server = await startFakeTcp((cmd) => {
+      if (cmd.system?.get_sysinfo) {
+        return {
+          system: {
+            get_sysinfo: { relay_state: relayState, on_time: relayState ? 5 : 0, active_mode: activeMode }
+          }
+        };
+      }
+      return { err: 1 };
+    });
+    const w = api.monitor.watch({ host: "127.0.0.1", port: server.port }, { intervalMs: 50 });
+    try {
+      const baseline = await nextEvent(w, "state");
+      expect(baseline.relayState).toBe(0);
+      expect(baseline.changedTo).toBe(null);
+
+      relayState = 1;
+      activeMode = "count_down"; // motion-triggered auto-off countdown
+      const onEv = await nextEvent(w, "on");
+      expect(onEv.changedTo).toBe(1);
+      expect(onEv.relayState).toBe(1);
+      expect(onEv.triggeredBy).toBe("motion");
+
+      relayState = 0;
+      activeMode = "none";
+      const offEv = await nextEvent(w, "off");
+      expect(offEv.changedTo).toBe(0);
+    } finally {
+      w.stop();
+      await server.close();
+    }
+  });
+
+  it("infers a manual on-transition when no countdown is active", async () => {
+    let relayState = 0;
+    const server = await startFakeTcp((cmd) => {
+      if (cmd.system?.get_sysinfo) {
+        return { system: { get_sysinfo: { relay_state: relayState, active_mode: "none" } } };
+      }
+      return { err: 1 };
+    });
+    const w = api.monitor.watch({ host: "127.0.0.1", port: server.port }, { intervalMs: 50 });
+    try {
+      await nextEvent(w, "state");
+      relayState = 1;
+      const onEv = await nextEvent(w, "on");
+      expect(onEv.triggeredBy).toBe("manual");
+    } finally {
+      w.stop();
+      await server.close();
+    }
+  });
+
+  it("emits error on a failed poll and keeps polling", async () => {
+    const w = api.monitor.watch({ host: "127.0.0.1", port: 1, timeoutMs: 200 }, { intervalMs: 50 });
+    try {
+      const err = await nextEvent(w, "error", 5000);
+      expect(err).toBeInstanceOf(Error);
+      // Watcher should survive the error and keep polling.
+      const err2 = await nextEvent(w, "error", 5000);
+      expect(err2).toBeInstanceOf(Error);
+    } finally {
+      w.stop();
+    }
+  });
+
+  it("stop() emits stop and halts polling", async () => {
+    const server = await startFakeTcp(() => ({ system: { get_sysinfo: { relay_state: 0 } } }));
+    const w = api.monitor.watch({ host: "127.0.0.1", port: server.port }, { intervalMs: 50 });
+    try {
+      await nextEvent(w, "state");
+      const stopped = nextEvent(w, "stop", 1000);
+      w.stop();
+      await stopped;
+    } finally {
+      await server.close();
+    }
   });
 });
