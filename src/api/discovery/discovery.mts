@@ -1,26 +1,45 @@
 /**
- * Kasa device discovery via UDP broadcast.
+ * Kasa device discovery.
  *
- * Sends an encrypted `system.get_sysinfo` to the subnet's directed broadcast
- * on port 9999 and collects responding devices until either `timeoutMs`
- * elapses or `maxDevices` reply.
+ * Two strategies:
+ *   - `discover()` — UDP broadcast. Fast, but local subnet only: broadcasts
+ *     don't cross routers, so it can't see devices on another subnet/VLAN.
+ *   - `sweep(cidr)` — unicast TCP `get_sysinfo` to every host in a CIDR. Each
+ *     probe is a routed connection, so this works across subnets.
  *
- * Broadcast address resolution (in order of precedence):
+ * Broadcast address resolution for `discover()` (in order of precedence):
  *   1. `options.broadcast` if explicitly given
  *   2. computed from `options.baseIp` (matched against this host's interfaces)
  *   3. computed from the host's first non-internal IPv4 interface
  *
- * Self-contained on purpose — see the note in `protocol/protocol.mts`.
+ * The UDP cipher is inlined (it returns `Buffer`s, which slothlet's wrapper
+ * proxies if passed across `self` — see `protocol/protocol.mts`). `sweep()`
+ * goes through `self.protocol.send`, which returns plain JSON and is safe.
+ *
  * Newer KLAP-only devices won't reply on port 9999 (they need port 20002,
  * out of scope here).
  */
 import { createSocket } from "node:dgram";
 import { networkInterfaces } from "node:os";
 import type { NetworkInterfaceInfo } from "node:os";
-import type { DiscoverOptions, DiscoveredDevice, ResolvedBroadcast, SysInfo } from "../../lib/types.mts";
+import { self as rawSelf } from "@cldmv/slothlet/runtime";
+import type {
+	DiscoverOptions,
+	DiscoveredDevice,
+	ResolvedBroadcast,
+	SelfApi,
+	SweepOptions,
+	SysInfo
+} from "../../lib/types.mts";
+
+const self = rawSelf as unknown as SelfApi;
 
 const DEFAULT_PORT = 9999;
 const DEFAULT_TIMEOUT_MS = 3000;
+const DEFAULT_SWEEP_TIMEOUT_MS = 1000;
+const DEFAULT_SWEEP_CONCURRENCY = 64;
+/** Refuse to sweep ranges larger than a /16 — bigger scans should be deliberate. */
+const MAX_SWEEP_HOSTS = 65536;
 const XOR_SEED = 0xab;
 const QUERY: Record<string, Record<string, unknown>> = { system: { get_sysinfo: {} } };
 
@@ -215,4 +234,75 @@ export async function discover(options: DiscoverOptions = {}): Promise<Discovere
 
 		const timer = setTimeout(() => finish(null), timeoutMs);
 	});
+}
+
+// --- Unicast CIDR sweep --------------------------------------------------------
+
+/** Parse a CIDR string into its network base (uint32) and prefix length. */
+function parseCidr(cidr: string): { network: number; prefix: number } {
+	const slash = cidr.indexOf("/");
+	if (slash < 0) throw new Error(`Invalid CIDR (missing prefix): ${cidr}`);
+	const ip = cidr.slice(0, slash);
+	const prefix = Number(cidr.slice(slash + 1));
+	if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+		throw new Error(`Invalid CIDR prefix: ${cidr}`);
+	}
+	const mask = netmaskFromPrefix(prefix);
+	return { network: (ipToInt(ip) & mask) >>> 0, prefix };
+}
+
+/** Expand a CIDR to the list of host addresses to probe (network/broadcast excluded for /≤30). */
+function cidrHosts(cidr: string): string[] {
+	const { network, prefix } = parseCidr(cidr);
+	const total = 2 ** (32 - prefix);
+	if (total > MAX_SWEEP_HOSTS) {
+		throw new Error(
+			`CIDR ${cidr} spans ${total} addresses; refusing to sweep more than ${MAX_SWEEP_HOSTS}. Use a smaller range.`
+		);
+	}
+	const hosts: string[] = [];
+	if (total <= 2) {
+		// /31 and /32 — every address is usable.
+		for (let i = 0; i < total; i++) hosts.push(intToIp((network + i) >>> 0));
+	} else {
+		// Skip the network address and the directed-broadcast address.
+		for (let i = 1; i < total - 1; i++) hosts.push(intToIp((network + i) >>> 0));
+	}
+	return hosts;
+}
+
+/**
+ * Sweep a CIDR range by unicast TCP `get_sysinfo` to every host.
+ *
+ * Unlike {@link discover}, this works across subnets/VLANs because each probe
+ * is an ordinary routed TCP connection rather than a broadcast. Hosts that
+ * don't answer (no device, wrong port, timeout) are silently skipped.
+ *
+ * @param cidr - Range to scan, e.g. `"10.8.1.0/24"`.
+ */
+export async function sweep(cidr: string, options: SweepOptions = {}): Promise<DiscoveredDevice[]> {
+	const port = options.port ?? DEFAULT_PORT;
+	const timeoutMs = options.timeoutMs ?? DEFAULT_SWEEP_TIMEOUT_MS;
+	const concurrency = Math.max(1, options.concurrency ?? DEFAULT_SWEEP_CONCURRENCY);
+
+	const hosts = cidrHosts(cidr);
+	const found: DiscoveredDevice[] = [];
+	let cursor = 0;
+
+	const worker = async (): Promise<void> => {
+		while (cursor < hosts.length) {
+			const host = hosts[cursor++] as string;
+			try {
+				const response = await self.protocol.send({ host, port, timeoutMs }, QUERY);
+				const sysInfo = (response as { system?: { get_sysinfo?: SysInfo } }).system?.get_sysinfo;
+				if (sysInfo) found.push({ host, port, sysInfo });
+			} catch {
+				// Host absent, port closed, or not a Kasa device — skip.
+			}
+		}
+	};
+
+	await Promise.all(Array.from({ length: Math.min(concurrency, hosts.length) }, worker));
+	found.sort((a, b) => ipToInt(a.host) - ipToInt(b.host));
+	return found;
 }

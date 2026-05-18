@@ -65,13 +65,16 @@ export function decryptUdp(payload) {
 }
 
 /**
- * Start a fake Kasa TCP server on 127.0.0.1.
+ * Start a fake Kasa TCP server.
  * `handler(request)` receives the parsed JSON command and returns the response object (or a Promise).
  *
  * @param {(cmd: Record<string, Record<string, unknown>>) => unknown} handler
- * @returns {Promise<{ port: number; close: () => Promise<void>; received: Array<Record<string, unknown>> }>}
+ * @param {{ host?: string; port?: number }} [bind] - Bind address/port. Defaults to 127.0.0.1:0.
+ *   Loopback is 127.0.0.0/8, so 127.0.0.2, 127.0.0.3, ... can host distinct "devices".
+ * @returns {Promise<{ host: string; port: number; close: () => Promise<void>; received: Array<Record<string, unknown>> }>}
  */
-export async function startFakeTcp(handler) {
+export async function startFakeTcp(handler, bind = {}) {
+  const host = bind.host ?? "127.0.0.1";
   /** @type {Array<Record<string, unknown>>} */
   const received = [];
   const server = createServer((socket) => {
@@ -93,10 +96,11 @@ export async function startFakeTcp(handler) {
     });
     socket.on("error", () => {});
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(undefined)));
+  await new Promise((resolve) => server.listen(bind.port ?? 0, host, () => resolve(undefined)));
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("Failed to bind fake TCP server");
   return {
+    host,
     port: addr.port,
     received,
     close: () =>

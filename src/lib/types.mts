@@ -116,6 +116,16 @@ export interface DiscoverOptions {
 	maxDevices?: number;
 }
 
+/** Options for {@link DiscoveryApi.sweep} — unicast CIDR scan (works across subnets). */
+export interface SweepOptions {
+	/** TCP port to probe. Defaults to 9999. */
+	port?: number;
+	/** Per-host probe timeout in ms. Defaults to 1000. */
+	timeoutMs?: number;
+	/** Number of hosts probed in parallel. Defaults to 64. */
+	concurrency?: number;
+}
+
 /** Result of broadcast-address auto-detection. */
 export interface ResolvedBroadcast {
 	/** Local interface IPv4 to bind to. */
@@ -209,7 +219,13 @@ export interface ProtocolApi {
 }
 
 export interface DiscoveryApi {
+	/** Broadcast discovery — local subnet only (broadcasts don't cross routers). */
 	discover(options?: DiscoverOptions): Promise<DiscoveredDevice[]>;
+	/**
+	 * Unicast CIDR sweep — probes every host in `cidr` with a TCP `get_sysinfo`.
+	 * Works across subnets/VLANs since each probe is a routed unicast connection.
+	 */
+	sweep(cidr: string, options?: SweepOptions): Promise<DiscoveredDevice[]>;
 	/** Resolve the broadcast/bind addresses discovery would use for a given base IP. */
 	resolveBroadcast(baseIp?: string): ResolvedBroadcast;
 }

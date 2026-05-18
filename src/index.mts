@@ -68,6 +68,7 @@ export type {
   EnergyRealtime,
   DiscoveredDevice,
   DiscoverOptions,
+  SweepOptions,
   ResolvedBroadcast,
   DimmerActionMode,
   DimmerParameters,

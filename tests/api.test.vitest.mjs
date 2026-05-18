@@ -418,3 +418,49 @@ describe("api.motion", () => {
     ).rejects.toThrow(/non-negative/);
   });
 });
+
+describe("api.discovery — sweep (unicast CIDR scan)", () => {
+  it("finds devices across a CIDR by unicast probe", async () => {
+    // Loopback is 127.0.0.0/8 — host two fake "devices" on distinct IPs,
+    // same port, and sweep the /31 that spans them.
+    const a = await startFakeTcp(
+      () => ({ system: { get_sysinfo: { alias: "Device A", model: "HS200(US)" } } }),
+      { host: "127.0.0.2" }
+    );
+    const b = await startFakeTcp(
+      () => ({ system: { get_sysinfo: { alias: "Device B", model: "HS220(US)" } } }),
+      { host: "127.0.0.3", port: a.port }
+    );
+    try {
+      const devices = await api.discovery.sweep("127.0.0.2/31", {
+        port: a.port,
+        timeoutMs: 500,
+        concurrency: 8
+      });
+      expect(devices).toHaveLength(2);
+      expect(devices.map((d) => d.host)).toEqual(["127.0.0.2", "127.0.0.3"]);
+      expect(devices[0].sysInfo).toMatchObject({ alias: "Device A" });
+      expect(devices[1].sysInfo).toMatchObject({ alias: "Device B" });
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  });
+
+  it("returns an empty list when no host in range answers", async () => {
+    const devices = await api.discovery.sweep("127.0.0.8/30", {
+      port: 1, // nothing listening
+      timeoutMs: 300,
+      concurrency: 4
+    });
+    expect(devices).toEqual([]);
+  });
+
+  it("refuses to sweep an unreasonably large range", async () => {
+    await expect(api.discovery.sweep("10.0.0.0/8")).rejects.toThrow(/refusing to sweep/);
+  });
+
+  it("rejects a malformed CIDR", async () => {
+    await expect(api.discovery.sweep("10.8.1.0")).rejects.toThrow(/Invalid CIDR/);
+  });
+});
