@@ -33,6 +33,9 @@ describe("slothlet API surface", () => {
     expect(typeof api.bulb.setColor).toBe("function");
     expect(typeof api.energy.getRealtime).toBe("function");
     expect(typeof api.schedule.getRules).toBe("function");
+    expect(typeof api.switch.toggle).toBe("function");
+    expect(typeof api.dimmer.setBrightness).toBe("function");
+    expect(typeof api.motion.getPirConfig).toBe("function");
   });
 });
 
@@ -277,5 +280,141 @@ describe("api.discovery", () => {
       timeoutMs: 200
     });
     expect(devices).toEqual([]);
+  });
+});
+
+describe("api.switch", () => {
+  it("on() sends set_relay_state:1 (same protocol as plug)", async () => {
+    const server = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
+    try {
+      await api.switch.on({ host: "127.0.0.1", port: server.port });
+      expect(server.received[0]).toEqual({ system: { set_relay_state: { state: 1 } } });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("toggle() flips the reported relay state", async () => {
+    let relayState = /** @type {0|1} */ (1);
+    const server = await startFakeTcp((cmd) => {
+      if (cmd.system?.get_sysinfo) return { system: { get_sysinfo: { relay_state: relayState } } };
+      if (cmd.system?.set_relay_state) {
+        relayState = /** @type {0|1} */ (cmd.system.set_relay_state.state);
+        return { system: { set_relay_state: { err_code: 0 } } };
+      }
+      return { err: 1 };
+    });
+    try {
+      const next = await api.switch.toggle({ host: "127.0.0.1", port: server.port });
+      expect(next).toBe(0);
+      expect(relayState).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("api.dimmer", () => {
+  const NS = "smartlife.iot.dimmer";
+
+  it("setBrightness sends smartlife.iot.dimmer.set_brightness", async () => {
+    const server = await startFakeTcp(() => ({ [NS]: { set_brightness: { err_code: 0 } } }));
+    try {
+      await api.dimmer.setBrightness({ host: "127.0.0.1", port: server.port }, 60);
+      expect(server.received[0]).toEqual({ [NS]: { set_brightness: { brightness: 60 } } });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("setBrightnessTransition sends set_dimmer_transition with mode + duration", async () => {
+    const server = await startFakeTcp(() => ({ [NS]: { set_dimmer_transition: { err_code: 0 } } }));
+    try {
+      await api.dimmer.setBrightnessTransition({ host: "127.0.0.1", port: server.port }, 40, 1500);
+      expect(server.received[0]).toEqual({
+        [NS]: { set_dimmer_transition: { brightness: 40, mode: "gentle_on_off", duration: 1500 } }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("getParameters returns the dimmer tuning block", async () => {
+    const params = { minThreshold: 12, fadeOnTime: 1000, fadeOffTime: 1000, err_code: 0 };
+    const server = await startFakeTcp(() => ({ [NS]: { get_dimmer_parameters: params } }));
+    try {
+      const result = await api.dimmer.getParameters({ host: "127.0.0.1", port: server.port });
+      expect(result).toMatchObject({ minThreshold: 12, fadeOnTime: 1000 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("setDoubleClickAction includes the preset brightness as `index`", async () => {
+    const server = await startFakeTcp(() => ({ [NS]: { set_double_click_action: { err_code: 0 } } }));
+    try {
+      await api.dimmer.setDoubleClickAction({ host: "127.0.0.1", port: server.port }, "preset", 75);
+      expect(server.received[0]).toEqual({ [NS]: { set_double_click_action: { mode: "preset", index: 75 } } });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects out-of-range brightness", async () => {
+    await expect(
+      api.dimmer.setBrightness({ host: "127.0.0.1", port: 9999 }, 0)
+    ).rejects.toThrow(/1\.\.100/);
+  });
+});
+
+describe("api.motion", () => {
+  const PIR = "smartlife.iot.PIR";
+  const LAS = "smartlife.iot.LAS";
+
+  it("getPirConfig reads the PIR sensor config", async () => {
+    const cfg = { enable: 1, trigger_index: 1, cold_time: 60000, array: [80, 50, 20], err_code: 0 };
+    const server = await startFakeTcp(() => ({ [PIR]: { get_config: cfg } }));
+    try {
+      const result = await api.motion.getPirConfig({ host: "127.0.0.1", port: server.port });
+      expect(result).toMatchObject({ enable: 1, trigger_index: 1 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("setPirEnabled maps the boolean to PIR.set_enable", async () => {
+    const server = await startFakeTcp(() => ({ [PIR]: { set_enable: { err_code: 0 } } }));
+    try {
+      await api.motion.setPirEnabled({ host: "127.0.0.1", port: server.port }, false);
+      expect(server.received[0]).toEqual({ [PIR]: { set_enable: { enable: 0 } } });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("setPirSensitivity sends PIR.set_trigger_index", async () => {
+    const server = await startFakeTcp(() => ({ [PIR]: { set_trigger_index: { err_code: 0 } } }));
+    try {
+      await api.motion.setPirSensitivity({ host: "127.0.0.1", port: server.port }, 2);
+      expect(server.received[0]).toEqual({ [PIR]: { set_trigger_index: { index: 2 } } });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("setAmbientEnabled targets the LAS namespace", async () => {
+    const server = await startFakeTcp(() => ({ [LAS]: { set_enable: { err_code: 0 } } }));
+    try {
+      await api.motion.setAmbientEnabled({ host: "127.0.0.1", port: server.port }, true);
+      expect(server.received[0]).toEqual({ [LAS]: { set_enable: { enable: 1 } } });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects a negative sensitivity index", async () => {
+    await expect(
+      api.motion.setPirSensitivity({ host: "127.0.0.1", port: 9999 }, -1)
+    ).rejects.toThrow(/non-negative/);
   });
 });

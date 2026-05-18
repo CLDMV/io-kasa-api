@@ -1,0 +1,5 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"//": "Thin shim so editors auto-discover the project config. The real settings live in .configs/tsconfig.base.json; CLI scripts may target either (this file inherits its compilerOptions, include, and exclude).",
+	"extends": "./.configs/tsconfig.base.json"
+}
