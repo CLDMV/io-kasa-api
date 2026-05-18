@@ -10,7 +10,7 @@
  * each fires one event under its own path. Every command yields an `OpResult`.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type { AmbientLightConfig, DeviceTarget, MotionApi, PirConfig, SelfApi } from "../../lib/types.mts";
+import type { AmbientLightConfig, DeviceTarget, MotionApi, PirConfig, PirStatus, SelfApi } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 const PIR = "smartlife.iot.PIR";
@@ -33,6 +33,39 @@ function unwrap<T>(response: Record<string, Record<string, unknown>>, ns: string
 async function rawPir(target: DeviceTarget): Promise<PirConfig> {
 	const response = await self.protocol.send(target, { [PIR]: { get_config: {} } });
 	return unwrap<PirConfig>(response, PIR, "get_config");
+}
+
+/**
+ * Compute live motion state from a PIR config + ADC reading.
+ *
+ * python-kasa's calibration-free model (kasa/iot/modules/motion.py): the
+ * reference is the fixed midpoint of the device's declared ADC range —
+ * a hardware constant, not a learned baseline — and the trigger bar is the
+ * device's own configured sensitivity (`array[trigger_index]`). The PIR
+ * element is AC-coupled, so it always rests at midpoint regardless of
+ * ambient light; motion swings it away.
+ */
+function computePirStatus(config: PirConfig, adcValue: number): PirStatus {
+	const adcMin = Number(config.min_adc ?? 0);
+	const adcMax = Number(config.max_adc ?? 0);
+	const adcMid = Math.floor(Math.abs(adcMax - adcMin) / 2);
+	const triggerIndex = Number(config.trigger_index ?? 0);
+	const threshold = Number(config.array?.[triggerIndex] ?? 0);
+	const enabled = config.enable === 1;
+
+	// Signed offset from midpoint, normalised to ±100% of the available swing.
+	const offset = adcMid - adcValue;
+	const divisor = offset < 0 ? adcMid - adcMin : adcMax - adcMid;
+	const percent = divisor === 0 ? 0 : (offset / divisor) * 100;
+	return { triggered: enabled && Math.abs(percent) > 100 - threshold, percent, adcValue };
+}
+
+/** Raw merged PIR fetch — one round-trip for `get_config` + `get_adc_value`, then `computePirStatus`. */
+async function rawPirStatus(target: DeviceTarget): Promise<PirStatus> {
+	const response = await self.protocol.send(target, { [PIR]: { get_config: {}, get_adc_value: {} } });
+	const config = unwrap<PirConfig>(response, PIR, "get_config");
+	const adc = unwrap<{ value?: number; adc?: number }>(response, PIR, "get_adc_value");
+	return computePirStatus(config, Number(adc.value ?? adc.adc ?? 0));
 }
 
 /** Raw LAS config fetch — shared by `ambient.get` and the derived ambient getters. */
@@ -80,6 +113,12 @@ export const pir: MotionApi["pir"] = {
 				const result = unwrap<{ value?: number; adc?: number }>(response, PIR, "get_adc_value");
 				return result.value ?? result.adc ?? 0;
 			})
+	},
+	status: {
+		get: (target) => self.events.run("motion.pir.status.get", target, [], () => rawPirStatus(target))
+	},
+	triggered: {
+		get: (target) => self.events.run("motion.pir.triggered.get", target, [], async () => (await rawPirStatus(target)).triggered)
 	}
 };
 

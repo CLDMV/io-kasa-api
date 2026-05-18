@@ -182,8 +182,45 @@ export interface ResolvedBroadcast {
 
 /** Options for {@link MonitorApi.watch}. */
 export interface WatchOptions {
-	/** Poll interval in ms. Default 2000; floored at 250. */
+	/** Relay poll interval in ms. Default 2000; floored at 250. */
 	intervalMs?: number;
+	/** Also poll the PIR sensor and emit `motion`/`clear` events. Default false. */
+	motion?: boolean;
+	/** PIR poll interval in ms when `motion` is set. Default 400; floored at 250. */
+	motionIntervalMs?: number;
+	/** Quiet period (ms) with no PIR trigger before `clear` fires. Default 5000. */
+	motionClearMs?: number;
+}
+
+/** Options for {@link MonitorApi.watchMotion}. */
+export interface WatchMotionOptions {
+	/** PIR poll interval in ms. Default 400; floored at 250. */
+	intervalMs?: number;
+	/** Quiet period (ms) with no PIR trigger before `clear` fires. Default 5000. */
+	clearMs?: number;
+}
+
+/**
+ * A motion event emitted by a {@link DeviceMonitor} watching the PIR sensor.
+ *
+ * A PIR outputs an AC waveform, so one physical pass swings the ADC across
+ * the trigger bar repeatedly. The watcher debounces that burst: `motion`
+ * fires once when the burst starts, `clear` once the ADC has been quiet for
+ * the configured window.
+ */
+export interface PirMotionEvent {
+	/** Device host that produced the event. */
+	host: string;
+	/** `true` for a `motion` event, `false` for a `clear` event. */
+	detected: boolean;
+	/** Motion magnitude at this poll — ±% of ADC swing (see {@link PirStatus}). */
+	percent: number;
+	/** Raw PIR ADC reading at this poll. */
+	adcValue: number;
+	/** `Date.now()` of the poll. */
+	at: number;
+	/** On a `clear` event: how long motion was active, in ms. */
+	durationMs?: number;
 }
 
 /** A device state event emitted by a {@link DeviceMonitor}. */
@@ -199,10 +236,12 @@ export interface MonitorEvent {
 	/** Device `active_mode` (e.g. "none", "count_down"). */
 	activeMode: string;
 	/**
-	 * Best-effort cause of an on-transition. Heuristic from `active_mode`:
-	 * a running auto-off countdown implies the motion sensor fired.
+	 * Cause of an on-transition: `"motion"` when the watcher is also polling
+	 * the PIR (`watch` with `motion: true`) and motion was active around the
+	 * transition; otherwise `"unknown"` — the legacy protocol can't tell a
+	 * motion trigger from a manual press on its own.
 	 */
-	triggeredBy: "motion" | "manual" | "unknown";
+	triggeredBy: "motion" | "unknown";
 	/** `Date.now()` of the poll. */
 	at: number;
 	/** Full raw sysinfo from the poll. */
@@ -211,14 +250,17 @@ export interface MonitorEvent {
 
 /**
  * Poll-based device watcher. An `EventEmitter` that emits:
- *   - `"state"`  once — the initial reading (`changedTo` is `null`)
+ *   - `"state"`  once — the initial relay reading (`changedTo` is `null`)
  *   - `"on"`     when the relay goes 0→1
  *   - `"off"`    when the relay goes 1→0
- *   - `"change"` on either transition
+ *   - `"change"` on either relay transition
+ *   - `"motion"` when the PIR starts detecting motion (motion watch only)
+ *   - `"clear"`  when the PIR has been quiet for the clear window (motion watch only)
  *   - `"error"`  on a failed poll (polling continues)
  *   - `"stop"`   when {@link DeviceMonitor.stop} is called
  *
- * Listener payload is a {@link MonitorEvent} (except `"error"` → `Error`).
+ * Relay events carry a {@link MonitorEvent}; `motion`/`clear` carry a
+ * {@link PirMotionEvent}; `error` carries an `Error`.
  */
 export interface DeviceMonitor extends EventEmitter {
 	/** Stop polling. Emits `"stop"`. Idempotent. */
@@ -263,6 +305,23 @@ export interface PirConfig {
 	array?: number[];
 	err_code?: number;
 	[key: string]: unknown;
+}
+
+/**
+ * Live motion state, computed from a PIR config + ADC reading.
+ *
+ * Uses python-kasa's calibration-free model: the reference point is the
+ * fixed midpoint of the device's declared ADC range (a hardware constant,
+ * not a learned baseline), and the trigger bar is the device's own
+ * configured sensitivity threshold.
+ */
+export interface PirStatus {
+	/** Motion detected right now — python-kasa's `pir_triggered`. */
+	triggered: boolean;
+	/** Motion magnitude as ±% of the sensor's available ADC swing (0 at rest, ±100 railed). */
+	percent: number;
+	/** Raw ADC reading from `smartlife.iot.PIR.get_adc_value`. */
+	adcValue: number;
 }
 
 /** Ambient-light (LAS) sensor configuration from `smartlife.iot.LAS.get_config`. */
@@ -458,6 +517,10 @@ export interface MotionApi {
 		cooldown: ScalarResource<number | undefined, number>;
 		/** Live ADC reading — a real device call, not derived from `pir.get`. */
 		adc: ResourceGet<number>;
+		/** Computed live motion state — merges `get_config` + `get_adc_value`. */
+		status: ResourceGet<PirStatus>;
+		/** Whether motion is detected right now — the boolean from {@link PirStatus}. */
+		triggered: ResourceGet<boolean>;
 	};
 	ambient: {
 		/** Full ambient-light (LAS) config. */
@@ -527,10 +590,19 @@ export interface ScheduleApi {
 	};
 }
 
-/** Poll-based device monitoring — detect when a device turns on/off. */
+/** Poll-based device monitoring — detect when a device turns on/off or sees motion. */
 export interface MonitorApi {
-	/** Start watching a device. Returns a {@link DeviceMonitor} EventEmitter; call `.stop()` to end. */
+	/**
+	 * Watch a device's relay for on/off transitions. Pass `{ motion: true }`
+	 * to also poll the PIR and emit `motion`/`clear`. Returns a
+	 * {@link DeviceMonitor} EventEmitter; call `.stop()` to end.
+	 */
 	watch(target: DeviceTarget, options?: WatchOptions): DeviceMonitor;
+	/**
+	 * Watch only the PIR motion sensor — debounced `motion`/`clear` events,
+	 * no relay polling. For motion switches (KS200M, KS220M, ES20M).
+	 */
+	watchMotion(target: DeviceTarget, options?: WatchMotionOptions): DeviceMonitor;
 }
 
 /**

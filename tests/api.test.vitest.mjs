@@ -407,6 +407,55 @@ describe("motion resources", () => {
     }
   });
 
+  // python-kasa's calibration-free PIR model — see src/api/motion/motion.mts.
+  const pirCfg = { enable: 1, min_adc: 0, max_adc: 4095, trigger_index: 1, array: [80, 50, 20, 0], err_code: 0 };
+
+  it("pir.status.get merges get_config + get_adc_value into a motion state", async () => {
+    const server = await startFakeTcp((cmd) => {
+      // The status read asks for both methods in one round-trip.
+      expect(cmd[PIR]).toHaveProperty("get_config");
+      expect(cmd[PIR]).toHaveProperty("get_adc_value");
+      return { [PIR]: { get_config: pirCfg, get_adc_value: { value: 2041, err_code: 0 } } };
+    });
+    try {
+      const r = await api.motion.pir.status.get({ host: "127.0.0.1", port: server.port });
+      expect(r.ok).toBe(true);
+      expect(r.value.adcValue).toBe(2041);
+      // ADC near the 2047 midpoint → at rest, no motion.
+      expect(r.value.triggered).toBe(false);
+      expect(Math.abs(r.value.percent)).toBeLessThan(50);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("pir.status.get reports triggered when the ADC rails away from midpoint", async () => {
+    const server = await startFakeTcp(() => ({
+      [PIR]: { get_config: pirCfg, get_adc_value: { value: 0, err_code: 0 } }
+    }));
+    try {
+      const r = await api.motion.pir.status.get({ host: "127.0.0.1", port: server.port });
+      expect(r.value.triggered).toBe(true);
+      expect(Math.abs(r.value.percent)).toBeGreaterThan(50);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("pir.triggered.get derives the boolean and is false when the PIR is disabled", async () => {
+    const server = await startFakeTcp(() => ({
+      // Railed ADC, but enable:0 — a disabled sensor never reports motion.
+      [PIR]: { get_config: { ...pirCfg, enable: 0 }, get_adc_value: { value: 4000, err_code: 0 } }
+    }));
+    try {
+      const r = await api.motion.pir.triggered.get({ host: "127.0.0.1", port: server.port });
+      expect(r.op).toBe("motion.pir.triggered.get");
+      expect(r.value).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("ambient.enabled.set targets the LAS namespace", async () => {
     const server = await startFakeTcp(() => ({ [LAS]: { set_enable: { err_code: 0 } } }));
     try {
@@ -704,7 +753,9 @@ describe("api.monitor", () => {
       activeMode = "count_down";
       const onEv = await nextEvent(w, "on");
       expect(onEv.changedTo).toBe(1);
-      expect(onEv.triggeredBy).toBe("motion");
+      // Relay-only watch can't attribute the cause — only a motion watch can.
+      expect(onEv.triggeredBy).toBe("unknown");
+      expect(onEv.activeMode).toBe("count_down");
       relayState = 0;
       activeMode = "none";
       const offEv = await nextEvent(w, "off");
@@ -724,6 +775,33 @@ describe("api.monitor", () => {
       expect(err2).toBeInstanceOf(Error);
     } finally {
       w.stop();
+    }
+  });
+
+  it("watchMotion debounces a PIR burst into one motion event, then clear", async () => {
+    const PIR = "smartlife.iot.PIR";
+    const pirCfg = { enable: 1, min_adc: 0, max_adc: 4095, trigger_index: 1, array: [80, 50, 20, 0], err_code: 0 };
+    let adc = 2040; // idle: near the 2047 midpoint
+    const server = await startFakeTcp((cmd) => {
+      if (cmd[PIR]) return { [PIR]: { get_config: pirCfg, get_adc_value: { value: adc, err_code: 0 } } };
+      return { err: 1 };
+    });
+    const w = api.monitor.watchMotion(
+      { host: "127.0.0.1", port: server.port },
+      { intervalMs: 250, clearMs: 300 }
+    );
+    try {
+      adc = 0; // railed → motion
+      const motionEv = await nextEvent(w, "motion");
+      expect(motionEv.detected).toBe(true);
+      expect(Math.abs(motionEv.percent)).toBeGreaterThan(50);
+      adc = 2040; // back to idle → after clearMs of quiet, clears
+      const clearEv = await nextEvent(w, "clear");
+      expect(clearEv.detected).toBe(false);
+      expect(clearEv.durationMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      w.stop();
+      await server.close();
     }
   });
 
