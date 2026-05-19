@@ -10,15 +10,24 @@
  * each `.mts` to its own flat cache file, so sibling imports don't
  * resolve). Slothlet 3.6.0+ no longer proxy-wraps `Buffer`s crossing the
  * `self` boundary, so the exported cipher is safe to use across modules.
+ *
+ * No `throw` keyword in this file. Decode/parse helpers return a
+ * {@link Failure} sentinel on bad input; `send`/`sendUdp` translate that
+ * into a Promise rejection (which run()'s try/catch catches).
  */
 import { createConnection } from "node:net";
 import { createSocket } from "node:dgram";
-import type { DeviceTarget, KasaCommand, KasaResponse } from "../../lib/types.mts";
+import type { DeviceTarget, Failure, KasaCommand, KasaResponse } from "../../lib/types.mts";
 
 const DEFAULT_PORT = 9999;
 const DEFAULT_TIMEOUT_MS = 5000;
 const XOR_SEED = 0xab;
 const MAX_FRAME_BYTES = 1 << 20;
+
+/** Inline Failure check — `protocol` doesn't need to reach for `self.events`. */
+function isFailure(v: unknown): v is Failure {
+	return v !== null && typeof v === "object" && "__failure" in (v as Record<string, unknown>);
+}
 
 /** TCP encryption — autokey-XOR body prefixed with a 4-byte big-endian length. */
 export function encryptTcp(data: string): Buffer {
@@ -36,13 +45,13 @@ export function encryptTcp(data: string): Buffer {
 	return out;
 }
 
-/** TCP decryption — accepts the full length-prefixed frame. */
-export function decryptTcp(frame: Buffer): string {
-	if (frame.length < 4) throw new Error("Kasa TCP frame too short");
+/** TCP decryption — accepts the full length-prefixed frame. Returns Failure on bad input. */
+export function decryptTcp(frame: Buffer): string | Failure {
+	if (frame.length < 4) return { __failure: "Kasa TCP frame too short" };
 	const declared = frame.readUInt32BE(0);
 	const body = frame.subarray(4, 4 + declared);
 	if (body.length !== declared) {
-		throw new Error(`Kasa TCP frame truncated: expected ${declared} bytes, got ${body.length}`);
+		return { __failure: `Kasa TCP frame truncated: expected ${declared} bytes, got ${body.length}` };
 	}
 	const out = Buffer.alloc(body.length);
 	let key = XOR_SEED;
@@ -79,11 +88,12 @@ export function decryptUdp(payload: Buffer): string {
 	return out.toString("utf8");
 }
 
-function parseJson(raw: string): KasaResponse {
+function parseJson(raw: string): KasaResponse | Failure {
 	try {
 		return JSON.parse(raw) as KasaResponse;
 	} catch (err) {
-		throw new Error(`Kasa device returned invalid JSON: ${raw}`, { cause: err as Error });
+		const cause = err instanceof Error ? err.message : String(err);
+		return { __failure: `Kasa device returned invalid JSON: ${raw} (${cause})` };
 	}
 }
 
@@ -128,11 +138,17 @@ export async function send(target: DeviceTarget, command: KasaCommand): Promise<
 			}
 			if (expected !== null && received >= 4 + expected) {
 				const full = Buffer.concat(chunks, received);
-				try {
-					settle(null, parseJson(decryptTcp(full)));
-				} catch (err) {
-					settle(err as Error);
+				const decoded = decryptTcp(full);
+				if (isFailure(decoded)) {
+					settle(new Error(decoded.__failure));
+					return;
 				}
+				const parsed = parseJson(decoded);
+				if (isFailure(parsed)) {
+					settle(new Error(parsed.__failure));
+					return;
+				}
+				settle(null, parsed);
 			}
 		});
 
@@ -171,11 +187,13 @@ export async function sendUdp(target: DeviceTarget, command: KasaCommand): Promi
 		socket.once("error", (err) => settle(err));
 		socket.on("message", (msg, rinfo) => {
 			if (rinfo.address !== host) return;
-			try {
-				settle(null, parseJson(decryptUdp(msg)));
-			} catch (err) {
-				settle(err as Error);
+			const decoded = decryptUdp(msg);
+			const parsed = parseJson(decoded);
+			if (isFailure(parsed)) {
+				settle(new Error(parsed.__failure));
+				return;
 			}
+			settle(null, parsed);
 		});
 
 		socket.send(payload, 0, payload.length, port, host, (err) => {

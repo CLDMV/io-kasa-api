@@ -16,7 +16,7 @@
  * Payload is an {@link OpEvent}. Subscribe via `api.events.on(...)`.
  */
 import { EventEmitter } from "node:events";
-import type { DeviceTarget, OpEvent, OpEventListener, OpResult } from "../../lib/types.mts";
+import type { DeviceTarget, Failure, OpEvent, OpEventListener, OpResult } from "../../lib/types.mts";
 
 /** The bus. Unbounded listeners — a monitoring app may attach many. */
 const bus = new EventEmitter();
@@ -36,6 +36,20 @@ const defaults = { confirm: false };
 /** Set bus-level defaults. Called by `createKasaApi` to wire the global `confirm`. */
 export function configure(options: { confirm?: boolean }): void {
 	if (typeof options.confirm === "boolean") defaults.confirm = options.confirm;
+}
+
+/**
+ * Build a `Failure` sentinel — `return self.events.failure("...")` from inside
+ * a `work` callback to signal failure without throwing. `run` / `runUntargeted`
+ * convert it into the same `ok: false` + `error` event as a caught throw.
+ */
+export function failure(message: string): Failure {
+	return { __failure: message };
+}
+
+/** Type guard for {@link Failure}. */
+export function isFailure(value: unknown): value is Failure {
+	return value !== null && typeof value === "object" && "__failure" in value;
 }
 
 // --- Glob subscriptions -------------------------------------------------------
@@ -123,7 +137,7 @@ export async function run<T>(
 	op: string,
 	target: DeviceTarget,
 	args: unknown[],
-	work: () => Promise<T> | T,
+	work: () => Promise<T | Failure> | T | Failure,
 	opts?: { verify?: (() => Promise<boolean>) | undefined; confirm?: boolean | undefined }
 ): Promise<OpResult<T>> {
 	const started = Date.now();
@@ -136,7 +150,18 @@ export async function run<T>(
 	let result: OpResult<T>;
 	try {
 		const value = await work();
-		if (effectiveConfirm && opts?.verify) {
+		if (isFailure(value)) {
+			// work() signalled failure via the no-throw sentinel.
+			result = {
+				ok: false,
+				op,
+				target,
+				host: target.host,
+				error: value.__failure,
+				reachable: true,
+				durationMs: Date.now() - started
+			};
+		} else if (effectiveConfirm && opts?.verify) {
 			// Verified write: after the device acked, read the value back and compare.
 			let verified = false;
 			try {
@@ -156,10 +181,10 @@ export async function run<T>(
 					durationMs: Date.now() - started
 				};
 			} else {
-				result = { ok: true, op, target, host: target.host, value, reachable: true, durationMs: Date.now() - started };
+				result = { ok: true, op, target, host: target.host, value: value as T, reachable: true, durationMs: Date.now() - started };
 			}
 		} else {
-			result = { ok: true, op, target, host: target.host, value, reachable: true, durationMs: Date.now() - started };
+			result = { ok: true, op, target, host: target.host, value: value as T, reachable: true, durationMs: Date.now() - started };
 		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -196,7 +221,12 @@ export async function run<T>(
  * function resolves to the raw value (or `fallback` on failure) rather than
  * an `OpResult`.
  */
-export async function runUntargeted<T>(op: string, args: unknown[], work: () => Promise<T> | T, fallback: T): Promise<T> {
+export async function runUntargeted<T>(
+	op: string,
+	args: unknown[],
+	work: () => Promise<T | Failure> | T | Failure,
+	fallback: T
+): Promise<T> {
 	const started = Date.now();
 	const dot = op.indexOf(".");
 	const module = dot < 0 ? op : op.slice(0, dot);
@@ -207,8 +237,23 @@ export async function runUntargeted<T>(op: string, args: unknown[], work: () => 
 	let returnValue: T;
 	try {
 		const value = await work();
-		returnValue = value;
-		event = { ok: true, op, value, args, module, method, durationMs: Date.now() - started, at: Date.now() };
+		if (isFailure(value)) {
+			returnValue = fallback;
+			event = {
+				ok: false,
+				op,
+				error: value.__failure,
+				reachable: true,
+				args,
+				module,
+				method,
+				durationMs: Date.now() - started,
+				at: Date.now()
+			};
+		} else {
+			returnValue = value as T;
+			event = { ok: true, op, value: value as T, args, module, method, durationMs: Date.now() - started, at: Date.now() };
+		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		returnValue = fallback;

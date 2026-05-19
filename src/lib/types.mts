@@ -24,6 +24,17 @@ export interface DeviceTarget {
 	confirm?: boolean;
 }
 
+/**
+ * Sentinel returned by a `work` callback to signal failure **without throwing**.
+ * `events.run` / `events.runUntargeted` detect it and convert it to an
+ * `OpResult` with `ok: false` plus an `error` event. The `src/` codebase uses
+ * this in place of `throw new Error(...)` so the source has zero `throw`s and
+ * the no-throw contract is mechanically enforced.
+ */
+export interface Failure {
+	readonly __failure: string;
+}
+
 /** Per-call options accepted as the trailing argument on every command. */
 export interface CommandOptions {
 	/**
@@ -484,6 +495,10 @@ export interface EventsApi {
 	off(event: string, listener: OpEventListener): void;
 	/** The underlying EventEmitter, for advanced use. */
 	emitter: EventEmitter;
+	/** Build a {@link Failure} sentinel — `return self.events.failure("...")` from a work callback. */
+	failure(message: string): Failure;
+	/** Type guard for {@link Failure}. */
+	isFailure(value: unknown): value is Failure;
 	/**
 	 * Set bus-level defaults. `confirm` is the global default for verified
 	 * writes — overridden per-target and per-call. Called by `createKasaApi`.
@@ -503,7 +518,7 @@ export interface EventsApi {
 		op: string,
 		target: DeviceTarget,
 		args: unknown[],
-		work: () => Promise<T> | T,
+		work: () => Promise<T | Failure> | T | Failure,
 		opts?: { verify?: (() => Promise<boolean>) | undefined; confirm?: boolean | undefined }
 	): Promise<OpResult<T>>;
 	/**
@@ -512,7 +527,12 @@ export interface EventsApi {
 	 * no `target`/`host` and the function resolves to the raw value (or the
 	 * supplied `fallback` on failure) rather than an `OpResult`.
 	 */
-	runUntargeted<T>(op: string, args: unknown[], work: () => Promise<T> | T, fallback: T): Promise<T>;
+	runUntargeted<T>(
+		op: string,
+		args: unknown[],
+		work: () => Promise<T | Failure> | T | Failure,
+		fallback: T
+	): Promise<T>;
 }
 
 /** Read-only resource leaf. */

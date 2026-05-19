@@ -6,35 +6,46 @@
  *
  * On/off goes through `plug`/`switch`. Derived getters (fade/gentle/brightness)
  * call the same raw fetch the parent `get` uses, so each fires exactly one
- * event under its own path. Every command resolves to an `OpResult`.
+ * event under its own path. No `throw` in this file — failures return as
+ * `self.events.failure(...)` sentinels.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type { DimmerApi, DimmerParameters, DeviceTarget, SelfApi, SysInfo } from "../../lib/types.mts";
+import type {
+	DimmerActionMode,
+	DimmerApi,
+	DimmerParameters,
+	DeviceTarget,
+	Failure,
+	SelfApi,
+	SysInfo
+} from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 const NS = "smartlife.iot.dimmer";
 
-function unwrap<T>(response: Record<string, Record<string, unknown>>, method: string): T {
+function unwrap<T>(response: Record<string, Record<string, unknown>>, method: string): T | Failure {
 	const result = response[NS]?.[method];
-	if (result === undefined) throw new Error(`Kasa dimmer.${method}: missing in response`);
+	if (result === undefined) return self.events.failure(`Kasa dimmer.${method}: missing in response`);
 	if (result && typeof result === "object" && "err_code" in result) {
 		const code = (result as { err_code: number }).err_code;
 		if (code !== 0) {
 			const msg = (result as { err_msg?: string }).err_msg ?? `err_code ${code}`;
-			throw new Error(`Kasa dimmer.${method}: ${msg}`);
+			return self.events.failure(`Kasa dimmer.${method}: ${msg}`);
 		}
 	}
 	return result as T;
 }
 
-function assertBrightness(level: number): void {
+/** Validate a brightness level — returns an error message string, or null when OK. */
+function validateBrightness(level: number): string | null {
 	if (!Number.isInteger(level) || level < 1 || level > 100) {
-		throw new RangeError(`brightness must be an integer 1..100, got ${level}`);
+		return `brightness must be an integer 1..100, got ${level}`;
 	}
+	return null;
 }
 
 /** Raw tuning-parameter fetch — shared by `parameters.get` and the fade/gentle getters. */
-async function rawParameters(target: DeviceTarget): Promise<DimmerParameters> {
+async function rawParameters(target: DeviceTarget): Promise<DimmerParameters | Failure> {
 	const response = await self.protocol.send(target, { [NS]: { get_dimmer_parameters: {} } });
 	return unwrap<DimmerParameters>(response, "get_dimmer_parameters");
 }
@@ -47,10 +58,16 @@ async function rawBrightness(target: DeviceTarget): Promise<number | undefined> 
 }
 
 /** Raw `set_*_time` write for the fade/gentle ramp resources. */
-async function rawSetTime(target: DeviceTarget, method: string, arg: string, ms: number): Promise<unknown> {
-	if (ms < 0) throw new RangeError(`time must be >= 0, got ${ms}`);
+async function rawSetTime(target: DeviceTarget, method: string, arg: string, ms: number): Promise<unknown | Failure> {
+	if (ms < 0) return self.events.failure(`time must be >= 0, got ${ms}`);
 	const response = await self.protocol.send(target, { [NS]: { [method]: { [arg]: Math.round(ms) } } });
 	return unwrap(response, method);
+}
+
+/** Raw default-behavior fetch — for verifying doubleClick / longPress writes. */
+async function rawDefaultBehavior(target: DeviceTarget): Promise<{ double_click?: { mode?: string }; long_press?: { mode?: string } } | Failure> {
+	const response = await self.protocol.send(target, { [NS]: { get_default_behavior: {} } });
+	return unwrap(response, "get_default_behavior");
 }
 
 /** Build a fade/gentle ramp resource: derived `get` from `parameters`, `set` via `rawSetTime`. */
@@ -63,13 +80,18 @@ function rampResource(
 	return {
 		get: (target) =>
 			self.events.run(`${op}.get`, target, [], async () => {
-				const value = (await rawParameters(target))[field];
+				const r = await rawParameters(target);
+				if (self.events.isFailure(r)) return r;
+				const value = r[field];
 				return typeof value === "number" ? value : undefined;
 			}),
 		set: (target, ms, options) =>
 			self.events.run(`${op}.set`, target, [ms], () => rawSetTime(target, method, arg, ms), {
 				confirm: options?.confirm,
-				verify: async () => (await rawParameters(target))[field] === Math.round(ms)
+				verify: async () => {
+					const r = await rawParameters(target);
+					return !self.events.isFailure(r) && r[field] === Math.round(ms);
+				}
 			})
 	};
 }
@@ -83,9 +105,10 @@ export const brightness: DimmerApi["brightness"] = {
 			target,
 			[level, durationMs],
 			async () => {
-				assertBrightness(level);
+				const validErr = validateBrightness(level);
+				if (validErr) return self.events.failure(validErr);
 				if (typeof durationMs === "number") {
-					if (durationMs < 0) throw new RangeError(`durationMs must be >= 0, got ${durationMs}`);
+					if (durationMs < 0) return self.events.failure(`durationMs must be >= 0, got ${durationMs}`);
 					const response = await self.protocol.send(target, {
 						[NS]: { set_dimmer_transition: { brightness: level, mode: "gentle_on_off", duration: Math.round(durationMs) } }
 					});
@@ -94,8 +117,8 @@ export const brightness: DimmerApi["brightness"] = {
 				const response = await self.protocol.send(target, { [NS]: { set_brightness: { brightness: level } } });
 				return unwrap(response, "set_brightness");
 			},
-			// Verify by reading brightness back. Note: with `durationMs` the fade
-			// may still be in progress — confirm may report unmatched mid-fade.
+			// Verify by reading brightness back. With `durationMs` the fade may still
+			// be in progress — confirm may report unmatched mid-fade.
 			{ confirm: options?.confirm, verify: async () => (await rawBrightness(target)) === level }
 		)
 };
@@ -117,33 +140,39 @@ export const gentle: DimmerApi["gentle"] = {
 	off: rampResource("dimmer.gentle.off", "gentleOffTime", "set_gentle_off_time", "duration")
 };
 
-/**
- * Physical double-click action. `"preset"` mode jumps to `brightness`.
- * `confirm` is accepted but is a no-op — the device-side defaults block isn't read-back-verified.
- */
-export const doubleClick: DimmerApi["doubleClick"] = {
-	set: (target, mode, brightnessLevel, _options) =>
-		self.events.run("dimmer.doubleClick.set", target, [mode, brightnessLevel], async () => {
-			const args: Record<string, unknown> = { mode };
-			if (brightnessLevel !== undefined) {
-				assertBrightness(brightnessLevel);
-				args.index = brightnessLevel;
-			}
-			const response = await self.protocol.send(target, { [NS]: { set_double_click_action: args } });
-			return unwrap(response, "set_double_click_action");
-		})
-};
+/** Shared body for `doubleClick.set` / `longPress.set` (only the verb differs). */
+function buildPressAction(op: string, method: string, behaviorKey: "double_click" | "long_press"): {
+	set: (target: DeviceTarget, mode: DimmerActionMode, brightnessLevel?: number, options?: import("../../lib/types.mts").CommandOptions) => Promise<import("../../lib/types.mts").OpResult>;
+} {
+	return {
+		set: (target, mode, brightnessLevel, options) =>
+			self.events.run(
+				op,
+				target,
+				[mode, brightnessLevel],
+				async () => {
+					const args: Record<string, unknown> = { mode };
+					if (brightnessLevel !== undefined) {
+						const err = validateBrightness(brightnessLevel);
+						if (err) return self.events.failure(err);
+						args.index = brightnessLevel;
+					}
+					const response = await self.protocol.send(target, { [NS]: { [method]: args } });
+					return unwrap(response, method);
+				},
+				{
+					confirm: options?.confirm,
+					verify: async () => {
+						const r = await rawDefaultBehavior(target);
+						return !self.events.isFailure(r) && r[behaviorKey]?.mode === mode;
+					}
+				}
+			)
+	};
+}
 
-/** Physical long-press action. See {@link doubleClick}; `confirm` is a no-op here too. */
-export const longPress: DimmerApi["longPress"] = {
-	set: (target, mode, brightnessLevel, _options) =>
-		self.events.run("dimmer.longPress.set", target, [mode, brightnessLevel], async () => {
-			const args: Record<string, unknown> = { mode };
-			if (brightnessLevel !== undefined) {
-				assertBrightness(brightnessLevel);
-				args.index = brightnessLevel;
-			}
-			const response = await self.protocol.send(target, { [NS]: { set_long_press_action: args } });
-			return unwrap(response, "set_long_press_action");
-		})
-};
+/** Physical double-click action. `"preset"` mode jumps to `brightness`. */
+export const doubleClick: DimmerApi["doubleClick"] = buildPressAction("dimmer.doubleClick.set", "set_double_click_action", "double_click");
+
+/** Physical long-press action. See {@link doubleClick}. */
+export const longPress: DimmerApi["longPress"] = buildPressAction("dimmer.longPress.set", "set_long_press_action", "long_press");

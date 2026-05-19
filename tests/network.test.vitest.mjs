@@ -49,7 +49,7 @@ describe("resolveBroadcast", () => {
     expect(r.cidr).toBe(24);
   });
 
-  it("the sync impl throws on link-local only (the async wrapper turns this into null)", () => {
+  it("returns null when only link-local interfaces are present (no throw)", () => {
     const onlyLinkLocal = fakeOs({
       lo: [
         { address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" }
@@ -58,15 +58,15 @@ describe("resolveBroadcast", () => {
         { address: "169.254.10.20", netmask: "255.255.0.0", family: "IPv4", mac: "aa:bb:cc:dd:ee:ff", internal: false, cidr: "169.254.10.20/16" }
       ]
     });
-    expect(() => resolveBroadcast(undefined, onlyLinkLocal)).toThrow(/No usable IPv4 interface/);
+    expect(resolveBroadcast(undefined, onlyLinkLocal)).toBeNull();
   });
 
-  it("the sync impl throws when only loopback is present", () => {
+  it("returns null when only loopback is present (no throw)", () => {
     const loopbackOnly = fakeOs({
       lo: [
         { address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" }
       ]
     });
-    expect(() => resolveBroadcast(undefined, loopbackOnly)).toThrow(/No usable IPv4 interface/);
+    expect(resolveBroadcast(undefined, loopbackOnly)).toBeNull();
   });
 });

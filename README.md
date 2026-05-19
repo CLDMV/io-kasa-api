@@ -170,6 +170,40 @@ So `api.dimmer.brightness.set(...)` emits `dimmer.brightness.set` (path),
 `createKasaApi({ sweepCidr })` sets the CIDR the resolver scans — defaults to
 the `KASA_SWEEP` env var, then `10.8.0.0/23`.
 
+These methods are no-throw too: they emit on the `api.events` bus and resolve
+to a natural value (or `[]` / `null` / `undefined` on failure). `discover` /
+`sweep` give `[]` on a bad CIDR / interface failure; `resolve` gives `null`
+on a miss; `resolveBroadcast` gives `null` when no usable interface exists.
+The emitted `OpEvent` has no `target` / `host` (those fields are optional for
+non-device operations).
+
+### Verified writes — `confirm`
+
+By default a mutating command resolves `ok: true` as soon as the device
+acks the write with `err_code: 0` (which is the device's own confirmation
+it applied the change). For extra paranoia, opt into a read-back: the API
+re-reads the value after the write and resolves `ok: false` if it doesn't
+match what you asked for.
+
+Settable from three places, precedence **per-call > target > global**:
+
+```js
+// 1. Global default — every write on this API verifies.
+const api = await createKasaApi({ confirm: true });
+
+// 2. Per-target — every command for this target verifies.
+api.switch.on({ host: "10.0.0.5", confirm: true });
+
+// 3. Per-call — overrides the target / global (either direction).
+api.switch.on(target, { confirm: true });
+api.switch.on({ host: "10.0.0.5", confirm: true }, { confirm: false });
+```
+
+A few commands have no sensible read-back (`device.reboot`,
+`dimmer.doubleClick.set` / `longPress.set`, `plug.children.set`,
+`energy.stats.erase`) — they accept the option but ignore it and fall back
+to trusting `err_code: 0`.
+
 ## API overview
 
 `createKasaApi(options?)` returns:
@@ -201,6 +235,7 @@ or `api.device.alias.get(target)`.
 | Option | Default | Purpose |
 |---|---|---|
 | `sweepCidr` | `KASA_SWEEP` env / `10.8.0.0/23` | CIDR the device resolver sweeps |
+| `confirm` | `false` | global default for verified writes (see [above](#verified-writes--confirm)) |
 | `mode` | `"eager"` | `"eager"` loads all modules up front; `"lazy"` defers |
 | `bulkConcurrency` | `32` | in-flight probe count for `api.bulk.*` |
 | `context` | `{}` | extra context propagated through slothlet |

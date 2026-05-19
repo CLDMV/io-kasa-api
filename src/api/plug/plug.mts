@@ -3,26 +3,27 @@
  *   plug.power.{get,set} · plug.on() · plug.off() · plug.toggle() · plug.children.set()
  *
  * `power.set(bool)` is a thin router to `on`/`off` — the real op (and event)
- * is `plug.on` / `plug.off`. Every command resolves to an `OpResult`.
+ * is `plug.on` / `plug.off`. No `throw` in this file; failures return as
+ * `self.events.failure(...)` sentinels that `run()` converts to `ok: false`.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type { CommandOptions, DeviceTarget, OpResult, PlugApi, SelfApi } from "../../lib/types.mts";
+import type { CommandOptions, DeviceTarget, Failure, OpResult, PlugApi, SelfApi } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 
-function checkError(result: unknown, op: string): unknown {
+function checkError(result: unknown, op: string): unknown | Failure {
 	if (result && typeof result === "object" && "err_code" in result) {
 		const code = (result as { err_code: number }).err_code;
 		if (code !== 0) {
 			const msg = (result as { err_msg?: string }).err_msg ?? `err_code ${code}`;
-			throw new Error(`Kasa ${op}: ${msg}`);
+			return self.events.failure(`Kasa ${op}: ${msg}`);
 		}
 	}
 	return result;
 }
 
 /** Raw relay write — no event wrapping. */
-async function sendRelay(target: DeviceTarget, state: 0 | 1, childIds?: string[]): Promise<unknown> {
+async function sendRelay(target: DeviceTarget, state: 0 | 1, childIds?: string[]): Promise<unknown | Failure> {
 	const command: Record<string, Record<string, unknown>> = { system: { set_relay_state: { state } } };
 	if (childIds && childIds.length > 0) command.context = { child_ids: childIds };
 	const response = await self.protocol.send(target, command);
@@ -30,18 +31,23 @@ async function sendRelay(target: DeviceTarget, state: 0 | 1, childIds?: string[]
 }
 
 /** Raw relay read — no event wrapping. */
-async function readState(target: DeviceTarget): Promise<0 | 1> {
+async function readState(target: DeviceTarget): Promise<(0 | 1) | Failure> {
 	const response = await self.protocol.send(target, { system: { get_sysinfo: {} } });
 	const sysInfo = response.system?.get_sysinfo as { relay_state?: 0 | 1 } | undefined;
 	if (sysInfo?.relay_state === 0 || sysInfo?.relay_state === 1) return sysInfo.relay_state;
-	throw new Error(`Device at ${target.host} did not report a relay_state`);
+	return self.events.failure(`Device at ${target.host} did not report a relay_state`);
+}
+
+async function relayIs(target: DeviceTarget, want: 0 | 1): Promise<boolean> {
+	const r = await readState(target);
+	return !self.events.isFailure(r) && r === want;
 }
 
 /** Power the outlet on. */
 export function on(target: DeviceTarget, options?: CommandOptions): Promise<OpResult> {
 	return self.events.run("plug.on", target, [], () => sendRelay(target, 1), {
 		confirm: options?.confirm,
-		verify: async () => (await readState(target)) === 1
+		verify: () => relayIs(target, 1)
 	});
 }
 
@@ -49,7 +55,7 @@ export function on(target: DeviceTarget, options?: CommandOptions): Promise<OpRe
 export function off(target: DeviceTarget, options?: CommandOptions): Promise<OpResult> {
 	return self.events.run("plug.off", target, [], () => sendRelay(target, 0), {
 		confirm: options?.confirm,
-		verify: async () => (await readState(target)) === 0
+		verify: () => relayIs(target, 0)
 	});
 }
 
@@ -62,15 +68,17 @@ export function toggle(target: DeviceTarget, options?: CommandOptions): Promise<
 		[],
 		async () => {
 			const current = await readState(target);
+			if (self.events.isFailure(current)) return current;
 			next = current === 1 ? 0 : 1;
-			await sendRelay(target, next);
+			const written = await sendRelay(target, next);
+			if (self.events.isFailure(written)) return written;
 			return next;
 		},
-		{ confirm: options?.confirm, verify: async () => (await readState(target)) === next }
+		{ confirm: options?.confirm, verify: () => relayIs(target, next) }
 	);
 }
 
-/** Relay power state. `set` routes to `on`/`off`, so the event is `plug.on`/`plug.off`. */
+/** Relay power state. `set` routes to `on`/`off`. */
 export const power: PlugApi["power"] = {
 	get: (target) => self.events.run("plug.power.get", target, [], () => readState(target)),
 	set: (target, isOn, options) => (isOn ? on(target, options) : off(target, options))
@@ -78,12 +86,28 @@ export const power: PlugApi["power"] = {
 
 /**
  * Per-outlet control for multi-outlet strips (HS300, KP200).
- * `confirm` is a no-op here — child relay state isn't read-back-verified.
+ * Verifies each child's state in `sysinfo.children`.
  */
 export const children: PlugApi["children"] = {
-	set: (target, childIds, isOn /*, options */) =>
-		self.events.run("plug.children.set", target, [childIds, isOn], () => {
-			if (childIds.length === 0) throw new Error("children.set requires at least one child id");
-			return sendRelay(target, isOn ? 1 : 0, childIds);
-		})
+	set: (target, childIds, isOn, options) =>
+		self.events.run(
+			"plug.children.set",
+			target,
+			[childIds, isOn],
+			() => {
+				if (childIds.length === 0) return self.events.failure("children.set requires at least one child id");
+				return sendRelay(target, isOn ? 1 : 0, childIds);
+			},
+			{
+				confirm: options?.confirm,
+				verify: async () => {
+					if (childIds.length === 0) return false;
+					const response = await self.protocol.send(target, { system: { get_sysinfo: {} } });
+					const kids = (response.system?.get_sysinfo as { children?: Array<{ id: string; state: 0 | 1 }> } | undefined)?.children;
+					if (!kids) return false;
+					const wanted = isOn ? 1 : 0;
+					return childIds.every((id) => kids.find((c) => c.id === id)?.state === wanted);
+				}
+			}
+		)
 };

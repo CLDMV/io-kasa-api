@@ -2,22 +2,18 @@
  * Kasa device discovery.
  *
  * Two strategies:
- *   - `discover()` — UDP broadcast. Fast, but local subnet only: broadcasts
- *     don't cross routers, so it can't see devices on another subnet/VLAN.
+ *   - `discover()` — UDP broadcast. Fast, but local subnet only.
  *   - `sweep(cidr)` — unicast TCP `get_sysinfo` to every host in a CIDR. Each
  *     probe is a routed connection, so this works across subnets.
  *
- * Broadcast address resolution for `discover()` (in order of precedence):
- *   1. `options.broadcast` if explicitly given
- *   2. computed from `options.baseIp` (matched against this host's interfaces)
- *   3. computed from the host's first non-internal IPv4 interface
+ * Both never throw — they go through `self.events.runUntargeted` and resolve
+ * to `[]` (and an `error` event) on failure. No `throw` keyword in this file;
+ * internal validators return `Failure` sentinels or `null` instead.
  *
- * The UDP cipher comes from `self.protocol` — slothlet 3.6.0+ no longer
- * proxy-wraps `Buffer`s crossing the `self` boundary, so the shared cipher
- * works directly. `sweep()` goes through `self.protocol.send`.
+ * The UDP cipher comes from `self.protocol` — slothlet 3.6.0+ passes
+ * `Buffer`s across the `self` boundary intact.
  *
- * Newer KLAP-only devices won't reply on port 9999 (they need port 20002,
- * out of scope here).
+ * Newer KLAP-only devices won't reply on port 9999 (port 20002, out of scope).
  */
 import { createSocket } from "node:dgram";
 import { networkInterfaces } from "node:os";
@@ -26,6 +22,7 @@ import { self as rawSelf } from "@cldmv/slothlet/runtime";
 import type {
 	DiscoverOptions,
 	DiscoveredDevice,
+	Failure,
 	ResolvedBroadcast,
 	SelfApi,
 	SweepOptions,
@@ -47,11 +44,10 @@ const QUERY: Record<string, Record<string, unknown>> = { system: { get_sysinfo: 
 /** Function shape compatible with {@link networkInterfaces}, used for test injection. */
 export type GetInterfacesFn = () => ReturnType<typeof networkInterfaces>;
 
+/** Parse an IPv4 address to a uint32 — returns `NaN` on malformed input (no throw). */
 function ipToInt(ip: string): number {
 	const parts = ip.split(".").map((p) => Number(p));
-	if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
-		throw new Error(`Not an IPv4 address: ${ip}`);
-	}
+	if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return NaN;
 	return (((parts[0] as number) << 24) | ((parts[1] as number) << 16) | ((parts[2] as number) << 8) | (parts[3] as number)) >>> 0;
 }
 
@@ -96,12 +92,14 @@ function listIPv4Interfaces(getInterfaces: GetInterfacesFn): Array<{
 }
 
 /**
- * Sync resolver — throws if no candidate interface exists. Exported for
- * tests that want to assert behaviour without the slothlet runtime; the
- * public {@link resolveBroadcast} wraps this in `runUntargeted` so callers
- * see a no-throw `ResolvedBroadcast | null` instead.
+ * Sync resolver — returns `null` when no candidate interface exists (no throw).
+ * Exported for tests; the public {@link resolveBroadcast} wraps this with the
+ * event/no-throw machinery.
  */
-export function resolveBroadcastSync(baseIp?: string, getInterfaces: GetInterfacesFn = networkInterfaces): ResolvedBroadcast {
+export function resolveBroadcastSync(
+	baseIp?: string,
+	getInterfaces: GetInterfacesFn = networkInterfaces
+): ResolvedBroadcast | null {
 	const interfaces = listIPv4Interfaces(getInterfaces);
 
 	if (baseIp) {
@@ -121,9 +119,7 @@ export function resolveBroadcastSync(baseIp?: string, getInterfaces: GetInterfac
 	}
 
 	const first = interfaces[0];
-	if (!first) {
-		throw new Error("No usable IPv4 interface found for Kasa discovery. " + "Pass `baseIp` explicitly or specify `broadcast`.");
-	}
+	if (!first) return null;
 	const prefix = Number(first.info.cidr.split("/")[1]);
 	return {
 		bindAddress: first.info.address,
@@ -138,11 +134,6 @@ export function resolveBroadcastSync(baseIp?: string, getInterfaces: GetInterfac
 /**
  * Resolve a broadcast address to use for UDP discovery. Never throws — resolves
  * to `null` (and emits an `error` event) when no usable interface exists.
- *
- * Precedence:
- *   1. `baseIp` supplied and matching an interface → that interface's directed broadcast.
- *   2. `baseIp` supplied but unmatched → accept it as a literal bind address, assume /24.
- *   3. No `baseIp` → first non-internal IPv4 interface and its directed broadcast.
  */
 export async function resolveBroadcast(
 	baseIp?: string,
@@ -151,7 +142,10 @@ export async function resolveBroadcast(
 	return self.events.runUntargeted(
 		"discovery.resolveBroadcast",
 		[baseIp],
-		() => resolveBroadcastSync(baseIp, getInterfaces),
+		() => {
+			const r = resolveBroadcastSync(baseIp, getInterfaces);
+			return r ?? self.events.failure("No usable IPv4 interface found for Kasa discovery. Pass `baseIp` explicitly or specify `broadcast`.");
+		},
 		null
 	);
 }
@@ -176,16 +170,14 @@ async function discoverImpl(options: DiscoverOptions): Promise<DiscoveredDevice[
 	let broadcast = options.broadcast;
 	let bindAddress = options.bindAddress;
 	if (!broadcast || !bindAddress) {
-		try {
-			const resolved = resolveBroadcastSync(options.baseIp);
+		const resolved = resolveBroadcastSync(options.baseIp);
+		if (resolved) {
 			broadcast ??= resolved.broadcast;
 			bindAddress ??= resolved.bindAddress;
-		} catch (err) {
+		} else {
 			// Fall back to limited broadcast if interface auto-detect failed.
+			if (process.env.KASA_DEBUG) console.warn(`[kasa] interface auto-detect failed; using 255.255.255.255`);
 			broadcast ??= "255.255.255.255";
-			if (process.env.KASA_DEBUG) {
-				console.warn(`[kasa] interface auto-detect failed: ${(err as Error).message}`);
-			}
 		}
 	}
 
@@ -235,26 +227,26 @@ async function discoverImpl(options: DiscoverOptions): Promise<DiscoveredDevice[
 // --- Unicast CIDR sweep --------------------------------------------------------
 
 /** Parse a CIDR string into its network base (uint32) and prefix length. */
-function parseCidr(cidr: string): { network: number; prefix: number } {
+function parseCidr(cidr: string): { network: number; prefix: number } | Failure {
 	const slash = cidr.indexOf("/");
-	if (slash < 0) throw new Error(`Invalid CIDR (missing prefix): ${cidr}`);
+	if (slash < 0) return self.events.failure(`Invalid CIDR (missing prefix): ${cidr}`);
 	const ip = cidr.slice(0, slash);
 	const prefix = Number(cidr.slice(slash + 1));
-	if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
-		throw new Error(`Invalid CIDR prefix: ${cidr}`);
-	}
+	if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return self.events.failure(`Invalid CIDR prefix: ${cidr}`);
+	const network = ipToInt(ip);
+	if (Number.isNaN(network)) return self.events.failure(`Invalid CIDR (not an IPv4): ${cidr}`);
 	const mask = netmaskFromPrefix(prefix);
-	return { network: (ipToInt(ip) & mask) >>> 0, prefix };
+	return { network: (network & mask) >>> 0, prefix };
 }
 
 /** Expand a CIDR to the list of host addresses to probe (network/broadcast excluded for /≤30). */
-function cidrHosts(cidr: string): string[] {
-	const { network, prefix } = parseCidr(cidr);
+function cidrHosts(cidr: string): string[] | Failure {
+	const parsed = parseCidr(cidr);
+	if (self.events.isFailure(parsed)) return parsed;
+	const { network, prefix } = parsed;
 	const total = 2 ** (32 - prefix);
 	if (total > MAX_SWEEP_HOSTS) {
-		throw new Error(
-			`CIDR ${cidr} spans ${total} addresses; refusing to sweep more than ${MAX_SWEEP_HOSTS}. Use a smaller range.`
-		);
+		return self.events.failure(`CIDR ${cidr} spans ${total} addresses; refusing to sweep more than ${MAX_SWEEP_HOSTS}.`);
 	}
 	const hosts: string[] = [];
 	if (total <= 2) {
@@ -270,25 +262,23 @@ function cidrHosts(cidr: string): string[] {
 /**
  * Sweep a CIDR range by unicast TCP `get_sysinfo` to every host.
  *
- * Unlike {@link discover}, this works across subnets/VLANs because each probe
- * is an ordinary routed TCP connection rather than a broadcast. Hosts that
- * don't answer (no device, wrong port, timeout) are silently skipped.
- *
- * Never throws — resolves to `[]` on a bad CIDR / oversized range and emits
- * an `error` event.
- *
- * @param cidr - Range to scan, e.g. `"10.8.1.0/24"`.
+ * Works across subnets/VLANs because each probe is an ordinary routed TCP
+ * connection rather than a broadcast. Hosts that don't answer (no device,
+ * wrong port, timeout) are silently skipped. Never throws — resolves to `[]`
+ * on a bad CIDR / oversized range and emits an `error` event.
  */
 export async function sweep(cidr: string, options: SweepOptions = {}): Promise<DiscoveredDevice[]> {
 	return self.events.runUntargeted("discovery.sweep", [cidr, options], () => sweepImpl(cidr, options), []);
 }
 
-async function sweepImpl(cidr: string, options: SweepOptions): Promise<DiscoveredDevice[]> {
+async function sweepImpl(cidr: string, options: SweepOptions): Promise<DiscoveredDevice[] | Failure> {
 	const port = options.port ?? DEFAULT_PORT;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_SWEEP_TIMEOUT_MS;
 	const concurrency = Math.max(1, options.concurrency ?? DEFAULT_SWEEP_CONCURRENCY);
 
 	const hosts = cidrHosts(cidr);
+	if (self.events.isFailure(hosts)) return hosts;
+
 	const found: DiscoveredDevice[] = [];
 	let cursor = 0;
 

@@ -47,10 +47,12 @@ describe("protocol — XOR cipher", () => {
     expect(a.equals(b)).toBe(true);
   });
 
-  it("decryptTcp rejects truncated frames", () => {
+  it("decryptTcp returns a Failure sentinel for truncated frames (no throw)", () => {
     const frame = encryptTcp("hello");
     const truncated = frame.subarray(0, frame.length - 2);
-    expect(() => decryptTcp(truncated)).toThrow(/truncated/);
+    const result = decryptTcp(truncated);
+    expect(result && typeof result === "object" && "__failure" in result).toBe(true);
+    expect(result.__failure).toMatch(/truncated/);
   });
 });
 
