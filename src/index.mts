@@ -21,7 +21,8 @@ import { dirname, resolve } from "node:path";
 import slothlet from "@cldmv/slothlet";
 import { buildBulk } from "./lib/bulk.mts";
 import { buildSignal } from "./lib/signal.mts";
-import type { BulkApi, SelfApi, SignalApi } from "./lib/types.mts";
+import { buildDevices } from "./lib/devices.mts";
+import type { BulkApi, DevicesApi, SelfApi, SignalApi } from "./lib/types.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -37,6 +38,8 @@ export interface CreateKasaApiOptions {
   context?: Record<string, unknown>;
   /** Default in-flight probe count for `api.bulk.*` calls. Defaults to 32. */
   bulkConcurrency?: number;
+  /** CIDR the `api.devices` resolver sweeps. Defaults to `KASA_SWEEP` env or `10.8.0.0/23`. */
+  sweepCidr?: string;
 }
 
 /** The fully built Kasa API surface, plus the dynamic layers and slothlet's handle. */
@@ -45,6 +48,8 @@ export type KasaApi = SelfApi & {
   bulk: BulkApi;
   /** Network-health reporting. */
   signal: SignalApi;
+  /** Device discovery cache + MAC/name/IP resolver. */
+  devices: DevicesApi;
   slothlet: {
     shutdown?: () => Promise<void>;
     [key: string]: unknown;
@@ -71,11 +76,16 @@ export async function createKasaApi(options: CreateKasaApiOptions = {}): Promise
   // Attach the dynamic meta-layers (built by walking the loaded API).
   api.bulk = buildBulk(api as unknown as Record<string, Record<string, unknown>>, options.bulkConcurrency);
   api.signal = buildSignal(api as unknown as Parameters<typeof buildSignal>[0]);
+  api.devices = buildDevices(
+    api as unknown as Parameters<typeof buildDevices>[0],
+    options.sweepCidr ?? process.env.KASA_SWEEP
+  );
   return api;
 }
 
 export type {
   DeviceTarget,
+  DeviceRef,
   SendOptions,
   KasaCommand,
   KasaResponse,
@@ -117,5 +127,7 @@ export type {
   ScheduleApi,
   MonitorApi,
   BulkApi,
-  SignalApi
+  SignalApi,
+  DevicesApi,
+  DevicesScanOptions
 } from "./lib/types.mts";

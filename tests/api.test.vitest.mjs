@@ -718,6 +718,65 @@ describe("api.discovery — sweep (unicast CIDR scan)", () => {
   });
 });
 
+describe("api.devices — resolver + cache", () => {
+  it("resolve() returns an IP target directly, with no sweep", async () => {
+    expect(await api.devices.resolve("10.9.9.9")).toEqual({ host: "10.9.9.9" });
+  });
+
+  it("resolve() passes a DeviceTarget through unchanged", async () => {
+    const ref = { host: "10.9.9.9", port: 1234, timeoutMs: 500 };
+    expect(await api.devices.resolve(ref)).toBe(ref);
+  });
+
+  it("resolves a device by alias (case-insensitive) and by MAC from the cache", async () => {
+    const a = await startFakeTcp(
+      () => ({ system: { get_sysinfo: { alias: "Hall Lamp", model: "HS200(US)", mac: "AA:BB:CC:00:00:01" } } }),
+      { host: "127.0.0.2" }
+    );
+    const b = await startFakeTcp(
+      () => ({ system: { get_sysinfo: { alias: "Desk Plug", model: "HS105(US)", mac: "AA:BB:CC:00:00:02" } } }),
+      { host: "127.0.0.3", port: a.port }
+    );
+    try {
+      await api.devices.refresh({ cidr: "127.0.0.2/31", port: a.port, timeoutMs: 500 });
+      expect((await api.devices.resolve("Hall Lamp")).host).toBe("127.0.0.2");
+      expect((await api.devices.resolve("hall lamp")).host).toBe("127.0.0.2");
+      expect((await api.devices.resolve("aabbcc000002")).host).toBe("127.0.0.3");
+      expect((await api.devices.resolve("AA:BB:CC:00:00:02")).host).toBe("127.0.0.3");
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  });
+
+  it("resolve() rejects a name that isn't in the cache", async () => {
+    const a = await startFakeTcp(
+      () => ({ system: { get_sysinfo: { alias: "Known", mac: "AA:BB:CC:00:00:09" } } }),
+      { host: "127.0.0.2" }
+    );
+    try {
+      await api.devices.refresh({ cidr: "127.0.0.2/32", port: a.port, timeoutMs: 500 });
+      await expect(api.devices.resolve("Nonexistent")).rejects.toThrow(/No Kasa device matching/);
+    } finally {
+      await a.close();
+    }
+  });
+
+  it("list() serves the cache without re-sweeping", async () => {
+    const a = await startFakeTcp(
+      () => ({ system: { get_sysinfo: { alias: "Cached", mac: "AA:BB:CC:00:00:0A" } } }),
+      { host: "127.0.0.2" }
+    );
+    // Prime the cache, then drop the server — a re-sweep would now find nothing.
+    const first = await api.devices.refresh({ cidr: "127.0.0.2/32", port: a.port, timeoutMs: 500 });
+    expect(first).toHaveLength(1);
+    await a.close();
+    const second = await api.devices.list();
+    expect(second).toHaveLength(1);
+    expect(second[0].sysInfo.alias).toBe("Cached");
+  });
+});
+
 describe("api.monitor", () => {
   const nextEvent = (emitter, event, timeoutMs = 2000) =>
     new Promise((resolve, reject) => {

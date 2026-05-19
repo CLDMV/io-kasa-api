@@ -16,6 +16,12 @@ export interface DeviceTarget {
 	timeoutMs?: number;
 }
 
+/**
+ * A device reference accepted by the {@link DevicesApi} resolver:
+ * an IP string, a MAC string, an alias (name) string, or an explicit target.
+ */
+export type DeviceRef = string | DeviceTarget;
+
 /** Options that may be passed to a transport send. */
 export interface SendOptions extends DeviceTarget {
 	/** Transport: "tcp" (default) or "udp". */
@@ -166,6 +172,12 @@ export interface SweepOptions {
 	timeoutMs?: number;
 	/** Number of hosts probed in parallel. Defaults to 64. */
 	concurrency?: number;
+}
+
+/** Options for a {@link DevicesApi} scan — a {@link SweepOptions} plus the CIDR. */
+export interface DevicesScanOptions extends SweepOptions {
+	/** CIDR to sweep. Defaults to the `sweepCidr` passed to `createKasaApi`. */
+	cidr?: string;
 }
 
 /** Result of broadcast-address auto-detection. */
@@ -639,4 +651,26 @@ export interface BulkApi {
 export interface SignalApi {
 	/** Collect RSSI for a CIDR / device list / local broadcast, sorted best→worst. */
 	report(options?: SignalReportOptions): Promise<SignalEntry[]>;
+}
+
+/**
+ * Device discovery cache + resolver.
+ *
+ * The underlying CIDR sweep runs once and is cached, so a long-running app
+ * can resolve a device by MAC / alias / IP repeatedly without re-scanning
+ * the network. `refresh()` re-scans on demand.
+ */
+export interface DevicesApi {
+	/**
+	 * Resolve a MAC / alias (name) / IP — or a {@link DeviceTarget} passthrough —
+	 * to a {@link DeviceTarget}. An IP resolves directly; a MAC or name is looked
+	 * up in the cached sweep. Rejects if a MAC/name isn't in the cache.
+	 */
+	resolve(ref: DeviceRef): Promise<DeviceTarget>;
+	/** Look up the full {@link DiscoveredDevice} for a ref; `undefined` if not cached. */
+	find(ref: DeviceRef): Promise<DiscoveredDevice | undefined>;
+	/** Cached device list — sweeps once on first use, then serves the cache. */
+	list(options?: DevicesScanOptions): Promise<DiscoveredDevice[]>;
+	/** Force a re-sweep, replacing the cache. */
+	refresh(options?: DevicesScanOptions): Promise<DiscoveredDevice[]>;
 }
