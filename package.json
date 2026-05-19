@@ -1,5 +1,5 @@
 {
-	"name": "@cldmv/kasa-api",
+	"name": "@cldmv/io-kasa-api",
 	"version": "0.1.0",
 	"description": "Slothlet-powered API module for controlling TP-Link Kasa IoT devices on the local network.",
 	"type": "module",
