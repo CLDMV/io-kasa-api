@@ -6,11 +6,12 @@
  * returns the result. This is the one place op events are produced — modules
  * don't wire events themselves.
  *
- * Events emitted on completion of every operation:
- *   - `"op"`      — every operation
- *   - `"<op>"`    — that operation's path, e.g. `"plug.on"`
- *   - `"success"` — successful operations
- *   - `"error"`   — failed operations
+ * Every operation emits across three tiers, so a listener can be as broad
+ * or as narrow as it wants:
+ *   - general  — `"op"` (every operation), `"success"`, `"error"`
+ *   - path     — the full op path, e.g. `"plug.on"`, `"dimmer.brightness.set"`
+ *   - specific — the leaf action, e.g. `"on"` (fires for plug.on, switch.on,
+ *                bulb.on, …), `"set"`, `"get"`, `"toggle"`
  *
  * Payload is an {@link OpEvent}. Subscribe via `api.events.on(...)`.
  */
@@ -29,19 +30,81 @@ const UNREACHABLE = /timeout|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|EH
 /** The underlying EventEmitter, for advanced use (raw `emit`, listener introspection). */
 export const emitter = bus;
 
-/** Subscribe to an operation event. */
+/** Bus-level defaults — currently just the global `confirm` (verified-write) toggle. */
+const defaults = { confirm: false };
+
+/** Set bus-level defaults. Called by `createKasaApi` to wire the global `confirm`. */
+export function configure(options: { confirm?: boolean }): void {
+	if (typeof options.confirm === "boolean") defaults.confirm = options.confirm;
+}
+
+// --- Glob subscriptions -------------------------------------------------------
+// An event name containing `*` is a glob, matched against each operation's
+// `op` path. Glob listeners hang off the `"op"` catch-all and filter by regex;
+// the registry maps a caller's listener back to its wrapped op-listener so
+// `off()` can find and remove it.
+
+/** Translate a glob (`*` is the only wildcard) to a regex anchored over the op path. */
+function globToRegex(pattern: string): RegExp {
+	const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+	return new RegExp(`^${escaped}$`);
+}
+
+/** Per-listener glob subscriptions, keyed by the caller's original listener. */
+const globSubs = new Map<OpEventListener, Set<{ event: string; wrapped: OpEventListener }>>();
+
+/**
+ * Subscribe to an operation event.
+ *
+ * `event` may be a literal name — a tier (`"op"` / `"success"` / `"error"`),
+ * a full path (`"plug.on"`), or a leaf action (`"on"`) — or a **glob** with
+ * `*` matched against the op path, e.g. `"plug.*"`, `"*.set"`, `"motion.*"`.
+ */
 export function on(event: string, listener: OpEventListener): void {
-	bus.on(event, listener);
+	if (!event.includes("*")) {
+		bus.on(event, listener);
+		return;
+	}
+	const re = globToRegex(event);
+	const wrapped: OpEventListener = (ev) => {
+		if (re.test(ev.op)) listener(ev);
+	};
+	let subs = globSubs.get(listener);
+	if (!subs) {
+		subs = new Set();
+		globSubs.set(listener, subs);
+	}
+	subs.add({ event, wrapped });
+	bus.on("op", wrapped);
 }
 
-/** Subscribe to an operation event once. */
+/** Subscribe to an operation event once. `event` may be a glob (see {@link on}). */
 export function once(event: string, listener: OpEventListener): void {
-	bus.once(event, listener);
+	if (!event.includes("*")) {
+		bus.once(event, listener);
+		return;
+	}
+	const wrap: OpEventListener = (ev) => {
+		off(event, wrap);
+		listener(ev);
+	};
+	on(event, wrap);
 }
 
-/** Unsubscribe an operation-event listener. */
+/** Unsubscribe a listener — pass the same `event` (literal or glob) it was added with. */
 export function off(event: string, listener: OpEventListener): void {
-	bus.off(event, listener);
+	if (!event.includes("*")) {
+		bus.off(event, listener);
+		return;
+	}
+	const subs = globSubs.get(listener);
+	if (!subs) return;
+	for (const sub of subs) {
+		if (sub.event !== event) continue;
+		bus.off("op", sub.wrapped);
+		subs.delete(sub);
+	}
+	if (subs.size === 0) globSubs.delete(listener);
 }
 
 /**
@@ -60,25 +123,44 @@ export async function run<T>(
 	op: string,
 	target: DeviceTarget,
 	args: unknown[],
-	work: () => Promise<T> | T
+	work: () => Promise<T> | T,
+	opts?: { verify?: (() => Promise<boolean>) | undefined; confirm?: boolean | undefined }
 ): Promise<OpResult<T>> {
 	const started = Date.now();
 	const dot = op.indexOf(".");
 	const module = dot < 0 ? op : op.slice(0, dot);
 	const method = dot < 0 ? "" : op.slice(dot + 1);
+	// Per-call options > target field > global default.
+	const effectiveConfirm = opts?.confirm ?? target.confirm ?? defaults.confirm;
 
 	let result: OpResult<T>;
 	try {
 		const value = await work();
-		result = {
-			ok: true,
-			op,
-			target,
-			host: target.host,
-			value,
-			reachable: true,
-			durationMs: Date.now() - started
-		};
+		if (effectiveConfirm && opts?.verify) {
+			// Verified write: after the device acked, read the value back and compare.
+			let verified = false;
+			try {
+				verified = await opts.verify();
+			} catch {
+				// A verify failure (e.g. unreadable device) collapses to "not confirmed".
+				verified = false;
+			}
+			if (!verified) {
+				result = {
+					ok: false,
+					op,
+					target,
+					host: target.host,
+					error: "unconfirmed: device state did not match the requested value after the write",
+					reachable: true,
+					durationMs: Date.now() - started
+				};
+			} else {
+				result = { ok: true, op, target, host: target.host, value, reachable: true, durationMs: Date.now() - started };
+			}
+		} else {
+			result = { ok: true, op, target, host: target.host, value, reachable: true, durationMs: Date.now() - started };
+		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		result = {
@@ -93,8 +175,16 @@ export async function run<T>(
 	}
 
 	const event: OpEvent<T> = { ...result, module, method, args, at: Date.now() };
+	// Three tiers: general (op / success / error), path (the full op string),
+	// and specific (the leaf action — e.g. "on" fires for plug.on, switch.on).
+	const action = op.slice(op.lastIndexOf(".") + 1);
 	bus.emit("op", event);
 	bus.emit(op, event);
-	bus.emit(result.ok ? "success" : "error", event);
+	if (action && action !== op) bus.emit(action, event);
+	// Node's EventEmitter throws when `error` is emitted with no listeners — a
+	// `listenerCount` check makes this unconditionally safe regardless of any
+	// transient gap in the listener guard.
+	const channel = result.ok ? "success" : "error";
+	if (channel !== "error" || bus.listenerCount("error") > 0) bus.emit(channel, event);
 	return result;
 }

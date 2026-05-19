@@ -14,6 +14,23 @@ export interface DeviceTarget {
 	port?: number;
 	/** Transport timeout in milliseconds. */
 	timeoutMs?: number;
+	/**
+	 * Verify writes against the device by reading the value back after the set.
+	 * When `true`, a mutating command resolves `ok: false` if the read-back
+	 * doesn't match the requested value. Overridden by a per-call
+	 * {@link CommandOptions.confirm}; falls back to the global default set on
+	 * `createKasaApi({ confirm })`.
+	 */
+	confirm?: boolean;
+}
+
+/** Per-call options accepted as the trailing argument on every command. */
+export interface CommandOptions {
+	/**
+	 * Verify the write against the device by reading the value back. Overrides
+	 * the target's `confirm` and the global default. See {@link DeviceTarget.confirm}.
+	 */
+	confirm?: boolean;
 }
 
 /**
@@ -416,30 +433,49 @@ export interface DiscoveryApi {
 }
 
 /**
- * Shared event bus. Every command emits, on completion:
- *   - `"op"`      — every operation
- *   - `"<op>"`    — that operation's path, e.g. `"plug.on"`
- *   - `"success"` — successful operations
- *   - `"error"`   — failed operations
+ * Shared event bus. Every command emits, on completion, across three tiers:
+ *   - general  — `"op"` (every operation), `"success"`, `"error"`
+ *   - path     — the full op path, e.g. `"plug.on"`, `"dimmer.brightness.set"`
+ *   - specific — the leaf action, e.g. `"on"` (fires for plug.on, switch.on,
+ *                bulb.on, …), `"set"`, `"get"`, `"toggle"`
+ *
+ * `on` / `once` / `off` also accept a **glob** (`*`) matched against the op
+ * path — `"plug.*"`, `"*.set"`, `"motion.*"`.
  *
  * Commands never throw; failures arrive as `"error"` events and as
  * `OpResult` return values with `ok: false`.
  */
 export interface EventsApi {
-	/** Subscribe to an event. */
+	/** Subscribe to an event — a literal name or a `*` glob over the op path. */
 	on(event: string, listener: OpEventListener): void;
-	/** Subscribe to an event once. */
+	/** Subscribe once — a literal name or a `*` glob. */
 	once(event: string, listener: OpEventListener): void;
-	/** Unsubscribe. */
+	/** Unsubscribe — pass the same `event` (literal or glob) used to subscribe. */
 	off(event: string, listener: OpEventListener): void;
 	/** The underlying EventEmitter, for advanced use. */
 	emitter: EventEmitter;
 	/**
+	 * Set bus-level defaults. `confirm` is the global default for verified
+	 * writes — overridden per-target and per-call. Called by `createKasaApi`.
+	 */
+	configure(options: { confirm?: boolean }): void;
+	/**
 	 * Run a unit of work as a tracked operation: executes `work`, captures
 	 * success/failure into an {@link OpResult} (never throws), emits events,
 	 * and returns the result. Used internally by every command.
+	 *
+	 * When `opts.verify` is provided and the effective `confirm` is true
+	 * (per-call `opts.confirm` > `target.confirm` > the global from
+	 * {@link configure}), the verify callback runs after a successful
+	 * `work()`; if it returns `false` the result becomes `ok: false`.
 	 */
-	run<T>(op: string, target: DeviceTarget, args: unknown[], work: () => Promise<T> | T): Promise<OpResult<T>>;
+	run<T>(
+		op: string,
+		target: DeviceTarget,
+		args: unknown[],
+		work: () => Promise<T> | T,
+		opts?: { verify?: (() => Promise<boolean>) | undefined; confirm?: boolean | undefined }
+	): Promise<OpResult<T>>;
 }
 
 /** Read-only resource leaf. */
@@ -450,7 +486,7 @@ export interface ResourceGet<T> {
 /** A scalar resource leaf with a single-argument setter (`get` may be derived). */
 export interface ScalarResource<T, A = T> {
 	get(target: DeviceTarget): Promise<OpResult<T>>;
-	set(target: DeviceTarget, value: A): Promise<OpResult>;
+	set(target: DeviceTarget, value: A, options?: CommandOptions): Promise<OpResult>;
 }
 
 /** Generic device commands, addressed as resources. */
@@ -462,19 +498,19 @@ export interface DeviceApi {
 	/** Status LED — `get`/`set` are in terms of LED-on (the device stores `led_off`). */
 	led: ScalarResource<boolean>;
 	/** Reboot the device after an optional delay (default 1s). */
-	reboot(target: DeviceTarget, delaySec?: number): Promise<OpResult>;
+	reboot(target: DeviceTarget, delaySec?: number, options?: CommandOptions): Promise<OpResult>;
 }
 
 /** Smart-plug relay control. */
 export interface PlugApi {
 	/** Relay power state. `set` routes to `on`/`off`. */
 	power: ScalarResource<0 | 1, boolean>;
-	on(target: DeviceTarget): Promise<OpResult>;
-	off(target: DeviceTarget): Promise<OpResult>;
-	toggle(target: DeviceTarget): Promise<OpResult<0 | 1>>;
+	on(target: DeviceTarget, options?: CommandOptions): Promise<OpResult>;
+	off(target: DeviceTarget, options?: CommandOptions): Promise<OpResult>;
+	toggle(target: DeviceTarget, options?: CommandOptions): Promise<OpResult<0 | 1>>;
 	/** Per-outlet control for multi-outlet strips (HS300, KP200). */
 	children: {
-		set(target: DeviceTarget, childIds: string[], on: boolean): Promise<OpResult>;
+		set(target: DeviceTarget, childIds: string[], on: boolean, options?: CommandOptions): Promise<OpResult>;
 	};
 }
 
@@ -482,9 +518,9 @@ export interface PlugApi {
 export interface SwitchApi {
 	/** Relay power state. `set` routes to `on`/`off`. */
 	power: ScalarResource<0 | 1, boolean>;
-	on(target: DeviceTarget): Promise<OpResult>;
-	off(target: DeviceTarget): Promise<OpResult>;
-	toggle(target: DeviceTarget): Promise<OpResult<0 | 1>>;
+	on(target: DeviceTarget, options?: CommandOptions): Promise<OpResult>;
+	off(target: DeviceTarget, options?: CommandOptions): Promise<OpResult>;
+	toggle(target: DeviceTarget, options?: CommandOptions): Promise<OpResult<0 | 1>>;
 }
 
 /** Dimmer-switch control (HS220, KS220, KS230, ES20M). On/off is via `plug`/`switch`. */
@@ -492,7 +528,7 @@ export interface DimmerApi {
 	/** Brightness 1..100. `set` takes an optional fade duration (ms). */
 	brightness: {
 		get(target: DeviceTarget): Promise<OpResult<number | undefined>>;
-		set(target: DeviceTarget, level: number, durationMs?: number): Promise<OpResult>;
+		set(target: DeviceTarget, level: number, durationMs?: number, options?: CommandOptions): Promise<OpResult>;
 	};
 	/** Full dimmer tuning block. */
 	parameters: ResourceGet<DimmerParameters>;
@@ -508,11 +544,11 @@ export interface DimmerApi {
 	};
 	/** Physical double-click action. */
 	doubleClick: {
-		set(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<OpResult>;
+		set(target: DeviceTarget, mode: DimmerActionMode, brightness?: number, options?: CommandOptions): Promise<OpResult>;
 	};
 	/** Physical long-press action. */
 	longPress: {
-		set(target: DeviceTarget, mode: DimmerActionMode, brightness?: number): Promise<OpResult>;
+		set(target: DeviceTarget, mode: DimmerActionMode, brightness?: number, options?: CommandOptions): Promise<OpResult>;
 	};
 }
 
@@ -522,7 +558,7 @@ export interface MotionApi {
 		/** Full PIR config. */
 		get(target: DeviceTarget): Promise<OpResult<PirConfig>>;
 		/** Enable / disable the motion sensor. */
-		set(target: DeviceTarget, enabled: boolean): Promise<OpResult>;
+		set(target: DeviceTarget, enabled: boolean, options?: CommandOptions): Promise<OpResult>;
 		/** Motion-sensitivity preset index. */
 		sensitivity: ScalarResource<number | undefined, number>;
 		/** Re-arm cooldown (ms) after a trigger. */
@@ -549,16 +585,16 @@ export interface BulbApi {
 	/** Full light state. */
 	state: {
 		get(target: DeviceTarget): Promise<OpResult<LightState>>;
-		set(target: DeviceTarget, state: Partial<LightState>): Promise<OpResult<LightState>>;
+		set(target: DeviceTarget, state: Partial<LightState>, options?: CommandOptions): Promise<OpResult<LightState>>;
 	};
 	/** On/off state. `set` routes to `on`/`off`. */
 	power: ScalarResource<boolean>;
-	on(target: DeviceTarget, transitionMs?: number): Promise<OpResult>;
-	off(target: DeviceTarget, transitionMs?: number): Promise<OpResult>;
+	on(target: DeviceTarget, transitionMs?: number, options?: CommandOptions): Promise<OpResult>;
+	off(target: DeviceTarget, transitionMs?: number, options?: CommandOptions): Promise<OpResult>;
 	/** Brightness 1..100. `set` takes an optional transition (ms). */
 	brightness: {
 		get(target: DeviceTarget): Promise<OpResult<number | undefined>>;
-		set(target: DeviceTarget, level: number, transitionMs?: number): Promise<OpResult>;
+		set(target: DeviceTarget, level: number, transitionMs?: number, options?: CommandOptions): Promise<OpResult>;
 	};
 	/** Color as HSV. `set`'s `value` is brightness (defaults 100). */
 	color: {
@@ -566,13 +602,14 @@ export interface BulbApi {
 		set(
 			target: DeviceTarget,
 			hsv: { hue: number; saturation: number; value?: number },
-			transitionMs?: number
+			transitionMs?: number,
+			options?: CommandOptions
 		): Promise<OpResult>;
 	};
 	/** White color temperature in Kelvin. */
 	colorTemp: {
 		get(target: DeviceTarget): Promise<OpResult<number | undefined>>;
-		set(target: DeviceTarget, kelvin: number, transitionMs?: number): Promise<OpResult>;
+		set(target: DeviceTarget, kelvin: number, transitionMs?: number, options?: CommandOptions): Promise<OpResult>;
 	};
 }
 
@@ -589,7 +626,7 @@ export interface EnergyApi {
 			get(target: DeviceTarget, year: number): Promise<OpResult<Array<Record<string, number>>>>;
 		};
 		/** Wipe the device's cumulative counters. Irreversible. */
-		erase(target: DeviceTarget): Promise<OpResult>;
+		erase(target: DeviceTarget, options?: CommandOptions): Promise<OpResult>;
 	};
 }
 
@@ -598,7 +635,7 @@ export interface ScheduleApi {
 	rules: {
 		get(target: DeviceTarget): Promise<OpResult<unknown>>;
 		/** Remove every schedule rule. */
-		clear(target: DeviceTarget): Promise<OpResult>;
+		clear(target: DeviceTarget, options?: CommandOptions): Promise<OpResult>;
 	};
 }
 

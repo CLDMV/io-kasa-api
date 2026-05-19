@@ -66,26 +66,38 @@ function rampResource(
 				const value = (await rawParameters(target))[field];
 				return typeof value === "number" ? value : undefined;
 			}),
-		set: (target, ms) => self.events.run(`${op}.set`, target, [ms], () => rawSetTime(target, method, arg, ms))
+		set: (target, ms, options) =>
+			self.events.run(`${op}.set`, target, [ms], () => rawSetTime(target, method, arg, ms), {
+				confirm: options?.confirm,
+				verify: async () => (await rawParameters(target))[field] === Math.round(ms)
+			})
 	};
 }
 
 /** Brightness 1..100. `set` accepts an optional fade duration (ms). */
 export const brightness: DimmerApi["brightness"] = {
 	get: (target) => self.events.run("dimmer.brightness.get", target, [], () => rawBrightness(target)),
-	set: (target, level, durationMs) =>
-		self.events.run("dimmer.brightness.set", target, [level, durationMs], async () => {
-			assertBrightness(level);
-			if (typeof durationMs === "number") {
-				if (durationMs < 0) throw new RangeError(`durationMs must be >= 0, got ${durationMs}`);
-				const response = await self.protocol.send(target, {
-					[NS]: { set_dimmer_transition: { brightness: level, mode: "gentle_on_off", duration: Math.round(durationMs) } }
-				});
-				return unwrap(response, "set_dimmer_transition");
-			}
-			const response = await self.protocol.send(target, { [NS]: { set_brightness: { brightness: level } } });
-			return unwrap(response, "set_brightness");
-		})
+	set: (target, level, durationMs, options) =>
+		self.events.run(
+			"dimmer.brightness.set",
+			target,
+			[level, durationMs],
+			async () => {
+				assertBrightness(level);
+				if (typeof durationMs === "number") {
+					if (durationMs < 0) throw new RangeError(`durationMs must be >= 0, got ${durationMs}`);
+					const response = await self.protocol.send(target, {
+						[NS]: { set_dimmer_transition: { brightness: level, mode: "gentle_on_off", duration: Math.round(durationMs) } }
+					});
+					return unwrap(response, "set_dimmer_transition");
+				}
+				const response = await self.protocol.send(target, { [NS]: { set_brightness: { brightness: level } } });
+				return unwrap(response, "set_brightness");
+			},
+			// Verify by reading brightness back. Note: with `durationMs` the fade
+			// may still be in progress — confirm may report unmatched mid-fade.
+			{ confirm: options?.confirm, verify: async () => (await rawBrightness(target)) === level }
+		)
 };
 
 /** Full dimmer tuning block. */
@@ -105,9 +117,12 @@ export const gentle: DimmerApi["gentle"] = {
 	off: rampResource("dimmer.gentle.off", "gentleOffTime", "set_gentle_off_time", "duration")
 };
 
-/** Physical double-click action. `"preset"` mode jumps to `brightness`. */
+/**
+ * Physical double-click action. `"preset"` mode jumps to `brightness`.
+ * `confirm` is accepted but is a no-op — the device-side defaults block isn't read-back-verified.
+ */
 export const doubleClick: DimmerApi["doubleClick"] = {
-	set: (target, mode, brightnessLevel) =>
+	set: (target, mode, brightnessLevel, _options) =>
 		self.events.run("dimmer.doubleClick.set", target, [mode, brightnessLevel], async () => {
 			const args: Record<string, unknown> = { mode };
 			if (brightnessLevel !== undefined) {
@@ -119,9 +134,9 @@ export const doubleClick: DimmerApi["doubleClick"] = {
 		})
 };
 
-/** Physical long-press action. See {@link doubleClick}. */
+/** Physical long-press action. See {@link doubleClick}; `confirm` is a no-op here too. */
 export const longPress: DimmerApi["longPress"] = {
-	set: (target, mode, brightnessLevel) =>
+	set: (target, mode, brightnessLevel, _options) =>
 		self.events.run("dimmer.longPress.set", target, [mode, brightnessLevel], async () => {
 			const args: Record<string, unknown> = { mode };
 			if (brightnessLevel !== undefined) {

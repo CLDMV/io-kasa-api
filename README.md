@@ -39,22 +39,29 @@ npm install @cldmv/io-kasa-api
 
 ## Quick start
 
+The event bus is the **primary** interface: register handlers once, then
+fire commands and forget — outcomes arrive as events. Awaiting a command for
+its `OpResult` is fully supported too; it just isn't the main path.
+
 ```js
 import { createKasaApi } from "@cldmv/io-kasa-api";
 
 const api = await createKasaApi({ sweepCidr: "10.0.0.0/24" });
 
-// Watch failures across every operation.
-api.events.on("error", (e) => console.warn(`${e.op} @ ${e.host}: ${e.error}`));
+// 1. Register handlers once.
+api.events.on("op", (e) => console.log(`${e.op} @ ${e.host} → ${e.ok ? "ok" : e.error}`));
+api.events.on("error", (e) => console.warn(`${e.op} failed @ ${e.host}: ${e.error}`));
 
-// Resolve a device by name (or MAC, or IP) — the sweep is cached.
+// 2. Fire and forget — no await; the outcome lands on the bus.
 const lamp = await api.devices.resolve("Living Room Lamp");
+api.switch.on(lamp);
+api.dimmer.brightness.set(lamp, 60);
+```
 
-// Commands never throw — check `ok`.
-const r = await api.switch.on(lamp);
-if (!r.ok) console.warn(`turn-on failed: ${r.error}`);
-
-await api.dimmer.brightness.set(lamp, 60);
+```js
+// --- Alternative: await a command for its OpResult inline ---
+const r = await api.switch.off(lamp);
+if (!r.ok) console.warn(`turn-off failed: ${r.error}`);
 ```
 
 ## Concepts
@@ -73,11 +80,80 @@ Every device command resolves to an `OpResult`; it never rejects.
 | `reachable` | `false` when the failure was a connectivity error |
 | `durationMs` | wall-clock duration |
 
-### Events
+### Events — the primary interface
 
-A shared bus fires on every operation: `op` (all), `<op-path>` (e.g.
-`"plug.on"`), `success`, and `error`. Each payload is the `OpResult` plus
-dispatch detail. Subscribe via `api.events.on(event, listener)`.
+Every device command runs through one wrapper that, on completion, emits on
+the shared `api.events` bus **and** resolves an `OpResult`. The intended
+style is fire-and-forget — register handlers once, then issue commands
+without `await`. A command **never rejects** (the no-throw contract), so an
+un-awaited call raises no unhandled rejection. An operation's event fires
+when the operation **completes** — for a write, when the device returns
+`err_code: 0`, its own acknowledgement that the change was applied. The API
+issues no separate read-back; the send-then-verify loop in `tools/devtest.mts`
+is test-harness rigor, not API behaviour.
+
+Each operation emits across **three tiers** — listen as broadly or as
+narrowly as you want:
+
+| Tier | Event | Fires for |
+|---|---|---|
+| **general** | `op` | every operation |
+| | `success` | every operation that succeeded |
+| | `error` | every operation that failed |
+| **path** | `"<module>.….<method>"` | one exact operation — `"plug.on"`, `"dimmer.brightness.set"` |
+| **specific** | `"<method>"` (leaf) | that action on any module — `"on"` fires for `plug.on`, `switch.on`, `bulb.on` |
+
+```js
+api.events.on("op", (e) => {});       // general  — everything
+api.events.on("error", (e) => {});    // general  — every failure
+api.events.on("plug.on", (e) => {});  // path     — only plug.on
+api.events.on("on", (e) => {});       // specific — anything turning on
+api.events.on("set", (e) => {});      // specific — any setter
+
+api.plug.on(target);           // no await — outcome lands on the bus
+api.bulk.switch.off(targets);  // ditto
+```
+
+Each payload is an `OpEvent` — an `OpResult` plus `module`, `method`,
+`args`, and `at`.
+
+**Globs.** `on` / `once` / `off` also accept a `*` glob, matched against the
+operation's path:
+
+```js
+api.events.on("plug.*", (e) => {});        // every plug operation
+api.events.on("*.set", (e) => {});         // every setter, any module
+api.events.on("motion.pir.*", (e) => {});  // every PIR operation
+api.events.off("plug.*", handler);         // remove it with the same glob
+```
+
+### Event reference
+
+**General** (3): `op` · `success` · `error`.
+
+**Specific** (the leaf action — fires for that action on *any* module, e.g.
+`on` → `plug.on` + `switch.on` + `bulb.on`):
+`get` · `set` · `on` · `off` · `toggle` · `reboot` · `clear` · `erase`.
+
+**Path** — one event per method, named by its full dotted path:
+
+| Module | Path events (`<module>.…`) |
+|---|---|
+| `device` | `info.get` · `alias.get` · `alias.set` · `led.get` · `led.set` · `reboot` |
+| `plug` | `power.get` · `on` · `off` · `toggle` · `children.set` |
+| `switch` | `power.get` · `on` · `off` · `toggle` |
+| `dimmer` | `brightness.get` · `brightness.set` · `parameters.get` · `doubleClick.set` · `longPress.set` |
+| `motion` | `pir.get` · `pir.set` · `pir.sensitivity.get` · `pir.sensitivity.set` · `pir.cooldown.get` · `pir.cooldown.set` · `pir.adc.get` · `pir.status.get` · `pir.triggered.get` · `ambient.get` · `ambient.enabled.get` · `ambient.enabled.set` · `ambient.darkThreshold.get` · `ambient.darkThreshold.set` |
+| `bulb` | `state.get` · `state.set` · `power.get` · `on` · `off` · `brightness.get` · `brightness.set` · `color.get` · `color.set` · `colorTemp.get` · `colorTemp.set` |
+| `energy` | `realtime.get` · `stats.daily.get` · `stats.monthly.get` · `stats.erase` |
+| `schedule` | `rules.get` · `rules.clear` |
+
+So `api.dimmer.brightness.set(...)` emits `dimmer.brightness.set` (path),
+`set` (specific), `op`, and `success` (or `error`). `*.power.set` routes to
+`on`/`off`, so it emits `*.on` / `*.off` — there is no `power.set` event.
+
+> The `monitor` watchers are a **separate** event source — see
+> [Monitoring](#monitoring). Their events are *not* on the `api.events` bus.
 
 ### Discovery & the device resolver
 
@@ -141,17 +217,30 @@ const results = await api.bulk.plug.on([{ host: "10.0.0.5" }, { host: "10.0.0.6"
 
 ## Monitoring
 
+`monitor.watch()` and `monitor.watchMotion()` each return their **own**
+`EventEmitter` — distinct from the `api.events` operation bus. Where
+`api.events` reports *operations you issued*, a watcher reports *observed
+device state*: it polls, so it catches a change from **any** cause — a
+physical press, another app, motion — not just your own commands.
+
+| Watcher | Events |
+|---|---|
+| `watch()` | `state` (initial reading) · `on` · `off` · `change` · `error` · `stop` |
+| `watchMotion()` | `motion` · `clear` · `error` · `stop` |
+| `watch({ motion: true })` | all of the above combined |
+
 ```js
-// Relay on/off transitions.
+// Relay on/off transitions — emits state / on / off / change.
 const w = api.monitor.watch(lamp);
 w.on("on", (e) => console.log("on"));
 w.on("off", (e) => console.log("off"));
 
-// Debounced PIR motion — one `motion` event per burst, `clear` after a quiet window.
+// Debounced PIR motion — emits motion / clear (one `motion` per burst).
 const m = api.monitor.watchMotion(sensor, { clearMs: 5000 });
 m.on("motion", (e) => console.log(`motion @ ${e.percent.toFixed(0)}%`));
-m.on("clear", (e) => console.log(`still after ${e.durationMs}ms`));
-m.stop();
+m.on("clear", (e) => console.log(`still after ${e.durationMs}ms of motion`));
+
+m.stop(); // watchers also emit `error` (a failed poll) and `stop`
 ```
 
 ## Signal report

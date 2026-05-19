@@ -8,7 +8,7 @@
  * Every command resolves to an `OpResult`.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type { BulbApi, DeviceTarget, LightState, OpResult, SelfApi } from "../../lib/types.mts";
+import type { BulbApi, CommandOptions, DeviceTarget, LightState, OpResult, SelfApi } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 const NAMESPACE = "smartlife.iot.smartbulb.lightingservice";
@@ -37,47 +37,79 @@ async function rawTransition(target: DeviceTarget, state: Partial<LightState>, o
 	return checkLightState(response[NAMESPACE]?.[TRANSITION], op);
 }
 
+/** Verify that every field in `partial` matches what the device reports after the write. */
+async function lightStateMatches(target: DeviceTarget, partial: Partial<LightState>): Promise<boolean> {
+	const current = (await rawLightState(target)) as unknown as Record<string, unknown>;
+	for (const [key, want] of Object.entries(partial)) {
+		if (key === "transition_period" || key === "ignore_default") continue;
+		if (current[key] !== want) return false;
+	}
+	return true;
+}
+
 /** Turn the bulb on, optionally with a fade-in transition (ms). */
-export function on(target: DeviceTarget, transitionMs?: number): Promise<OpResult> {
-	return self.events.run("bulb.on", target, [transitionMs], () => {
-		const state: Partial<LightState> = { on_off: 1 };
-		if (typeof transitionMs === "number") state.transition_period = transitionMs;
-		return rawTransition(target, state, "on");
-	});
+export function on(target: DeviceTarget, transitionMs?: number, options?: CommandOptions): Promise<OpResult> {
+	return self.events.run(
+		"bulb.on",
+		target,
+		[transitionMs],
+		() => {
+			const state: Partial<LightState> = { on_off: 1 };
+			if (typeof transitionMs === "number") state.transition_period = transitionMs;
+			return rawTransition(target, state, "on");
+		},
+		{ confirm: options?.confirm, verify: async () => (await rawLightState(target)).on_off === 1 }
+	);
 }
 
 /** Turn the bulb off. */
-export function off(target: DeviceTarget, transitionMs?: number): Promise<OpResult> {
-	return self.events.run("bulb.off", target, [transitionMs], () => {
-		const state: Partial<LightState> = { on_off: 0 };
-		if (typeof transitionMs === "number") state.transition_period = transitionMs;
-		return rawTransition(target, state, "off");
-	});
+export function off(target: DeviceTarget, transitionMs?: number, options?: CommandOptions): Promise<OpResult> {
+	return self.events.run(
+		"bulb.off",
+		target,
+		[transitionMs],
+		() => {
+			const state: Partial<LightState> = { on_off: 0 };
+			if (typeof transitionMs === "number") state.transition_period = transitionMs;
+			return rawTransition(target, state, "off");
+		},
+		{ confirm: options?.confirm, verify: async () => (await rawLightState(target)).on_off === 0 }
+	);
 }
 
 /** Full light state. */
 export const state: BulbApi["state"] = {
 	get: (target) => self.events.run("bulb.state.get", target, [], () => rawLightState(target)),
-	set: (target, partial) =>
-		self.events.run("bulb.state.set", target, [partial], () => rawTransition(target, partial, "state.set"))
+	set: (target, partial, options) =>
+		self.events.run("bulb.state.set", target, [partial], () => rawTransition(target, partial, "state.set"), {
+			confirm: options?.confirm,
+			verify: () => lightStateMatches(target, partial)
+		})
 };
 
 /** On/off state. `set` routes to `on`/`off`. */
 export const power: BulbApi["power"] = {
 	get: (target) => self.events.run("bulb.power.get", target, [], async () => (await rawLightState(target)).on_off === 1),
-	set: (target, isOn) => (isOn ? on(target) : off(target))
+	set: (target, isOn, options) => (isOn ? on(target, undefined, options) : off(target, undefined, options))
 };
 
 /** Brightness 1..100. `set` takes an optional transition (ms). */
 export const brightness: BulbApi["brightness"] = {
 	get: (target) => self.events.run("bulb.brightness.get", target, [], async () => (await rawLightState(target)).brightness),
-	set: (target, level, transitionMs) =>
-		self.events.run("bulb.brightness.set", target, [level, transitionMs], () => {
-			if (level < 1 || level > 100) throw new RangeError(`brightness must be 1..100, got ${level}`);
-			const next: Partial<LightState> = { on_off: 1, brightness: level };
-			if (typeof transitionMs === "number") next.transition_period = transitionMs;
-			return rawTransition(target, next, "brightness.set");
-		})
+	set: (target, level, transitionMs, options) =>
+		self.events.run(
+			"bulb.brightness.set",
+			target,
+			[level, transitionMs],
+			() => {
+				if (level < 1 || level > 100) throw new RangeError(`brightness must be 1..100, got ${level}`);
+				const next: Partial<LightState> = { on_off: 1, brightness: level };
+				if (typeof transitionMs === "number") next.transition_period = transitionMs;
+				return rawTransition(target, next, "brightness.set");
+			},
+			// Verify brightness; a transition may still be in progress.
+			{ confirm: options?.confirm, verify: async () => (await rawLightState(target)).brightness === level }
+		)
 };
 
 /** Color as HSV. `set`'s `value` is brightness (defaults 100); `color_temp:0` enters RGB mode. */
@@ -87,34 +119,57 @@ export const color: BulbApi["color"] = {
 			const ls = await rawLightState(target);
 			return { hue: ls.hue ?? 0, saturation: ls.saturation ?? 0, value: ls.brightness ?? 0 };
 		}),
-	set: (target, hsv, transitionMs) =>
-		self.events.run("bulb.color.set", target, [hsv, transitionMs], () => {
-			if (hsv.hue < 0 || hsv.hue > 360) throw new RangeError(`hue must be 0..360, got ${hsv.hue}`);
-			if (hsv.saturation < 0 || hsv.saturation > 100) {
-				throw new RangeError(`saturation must be 0..100, got ${hsv.saturation}`);
+	set: (target, hsv, transitionMs, options) => {
+		const wantHue = Math.round(hsv.hue);
+		const wantSat = Math.round(hsv.saturation);
+		const wantLevel = hsv.value ?? 100;
+		return self.events.run(
+			"bulb.color.set",
+			target,
+			[hsv, transitionMs],
+			() => {
+				if (hsv.hue < 0 || hsv.hue > 360) throw new RangeError(`hue must be 0..360, got ${hsv.hue}`);
+				if (hsv.saturation < 0 || hsv.saturation > 100) {
+					throw new RangeError(`saturation must be 0..100, got ${hsv.saturation}`);
+				}
+				if (wantLevel < 1 || wantLevel > 100) throw new RangeError(`value (brightness) must be 1..100, got ${wantLevel}`);
+				const next: Partial<LightState> = {
+					on_off: 1,
+					color_temp: 0,
+					hue: wantHue,
+					saturation: wantSat,
+					brightness: wantLevel
+				};
+				if (typeof transitionMs === "number") next.transition_period = transitionMs;
+				return rawTransition(target, next, "color.set");
+			},
+			{
+				confirm: options?.confirm,
+				verify: async () => {
+					const ls = await rawLightState(target);
+					return ls.hue === wantHue && ls.saturation === wantSat && ls.brightness === wantLevel;
+				}
 			}
-			const level = hsv.value ?? 100;
-			if (level < 1 || level > 100) throw new RangeError(`value (brightness) must be 1..100, got ${level}`);
-			const next: Partial<LightState> = {
-				on_off: 1,
-				color_temp: 0,
-				hue: Math.round(hsv.hue),
-				saturation: Math.round(hsv.saturation),
-				brightness: level
-			};
-			if (typeof transitionMs === "number") next.transition_period = transitionMs;
-			return rawTransition(target, next, "color.set");
-		})
+		);
+	}
 };
 
 /** White color temperature in Kelvin. Valid range depends on the bulb model. */
 export const colorTemp: BulbApi["colorTemp"] = {
 	get: (target) => self.events.run("bulb.colorTemp.get", target, [], async () => (await rawLightState(target)).color_temp),
-	set: (target, kelvin, transitionMs) =>
-		self.events.run("bulb.colorTemp.set", target, [kelvin, transitionMs], () => {
-			if (kelvin < 0) throw new RangeError(`color_temp must be >= 0, got ${kelvin}`);
-			const next: Partial<LightState> = { on_off: 1, color_temp: Math.round(kelvin) };
-			if (typeof transitionMs === "number") next.transition_period = transitionMs;
-			return rawTransition(target, next, "colorTemp.set");
-		})
+	set: (target, kelvin, transitionMs, options) => {
+		const want = Math.round(kelvin);
+		return self.events.run(
+			"bulb.colorTemp.set",
+			target,
+			[kelvin, transitionMs],
+			() => {
+				if (kelvin < 0) throw new RangeError(`color_temp must be >= 0, got ${kelvin}`);
+				const next: Partial<LightState> = { on_off: 1, color_temp: want };
+				if (typeof transitionMs === "number") next.transition_period = transitionMs;
+				return rawTransition(target, next, "colorTemp.set");
+			},
+			{ confirm: options?.confirm, verify: async () => (await rawLightState(target)).color_temp === want }
+		);
+	}
 };

@@ -31,9 +31,22 @@ export const rules: ScheduleApi["rules"] = {
 			const response = await self.protocol.send(target, { [NS]: { get_rules: {} } });
 			return unwrap(response, "get_rules");
 		}),
-	clear: (target) =>
-		self.events.run("schedule.rules.clear", target, [], async () => {
-			const response = await self.protocol.send(target, { [NS]: { delete_all_rules: {} } });
-			return unwrap(response, "delete_all_rules");
-		})
+	clear: (target, options) =>
+		self.events.run(
+			"schedule.rules.clear",
+			target,
+			[],
+			async () => {
+				const response = await self.protocol.send(target, { [NS]: { delete_all_rules: {} } });
+				return unwrap(response, "delete_all_rules");
+			},
+			{
+				confirm: options?.confirm,
+				verify: async () => {
+					const response = await self.protocol.send(target, { [NS]: { get_rules: {} } });
+					const result = (response[NS]?.get_rules ?? {}) as { rule_list?: unknown[] };
+					return (result.rule_list?.length ?? 0) === 0;
+				}
+			}
+		)
 };

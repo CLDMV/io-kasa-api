@@ -6,7 +6,7 @@
  * is `plug.on` / `plug.off`. Every command resolves to an `OpResult`.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type { DeviceTarget, OpResult, PlugApi, SelfApi } from "../../lib/types.mts";
+import type { CommandOptions, DeviceTarget, OpResult, PlugApi, SelfApi } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 
@@ -38,34 +38,50 @@ async function readState(target: DeviceTarget): Promise<0 | 1> {
 }
 
 /** Power the outlet on. */
-export function on(target: DeviceTarget): Promise<OpResult> {
-	return self.events.run("plug.on", target, [], () => sendRelay(target, 1));
+export function on(target: DeviceTarget, options?: CommandOptions): Promise<OpResult> {
+	return self.events.run("plug.on", target, [], () => sendRelay(target, 1), {
+		confirm: options?.confirm,
+		verify: async () => (await readState(target)) === 1
+	});
 }
 
 /** Power the outlet off. */
-export function off(target: DeviceTarget): Promise<OpResult> {
-	return self.events.run("plug.off", target, [], () => sendRelay(target, 0));
+export function off(target: DeviceTarget, options?: CommandOptions): Promise<OpResult> {
+	return self.events.run("plug.off", target, [], () => sendRelay(target, 0), {
+		confirm: options?.confirm,
+		verify: async () => (await readState(target)) === 0
+	});
 }
 
 /** Read the current state then flip it. `value` is the new state. */
-export function toggle(target: DeviceTarget): Promise<OpResult<0 | 1>> {
-	return self.events.run("plug.toggle", target, [], async () => {
-		const current = await readState(target);
-		const next: 0 | 1 = current === 1 ? 0 : 1;
-		await sendRelay(target, next);
-		return next;
-	});
+export function toggle(target: DeviceTarget, options?: CommandOptions): Promise<OpResult<0 | 1>> {
+	let next: 0 | 1 = 0;
+	return self.events.run(
+		"plug.toggle",
+		target,
+		[],
+		async () => {
+			const current = await readState(target);
+			next = current === 1 ? 0 : 1;
+			await sendRelay(target, next);
+			return next;
+		},
+		{ confirm: options?.confirm, verify: async () => (await readState(target)) === next }
+	);
 }
 
 /** Relay power state. `set` routes to `on`/`off`, so the event is `plug.on`/`plug.off`. */
 export const power: PlugApi["power"] = {
 	get: (target) => self.events.run("plug.power.get", target, [], () => readState(target)),
-	set: (target, isOn) => (isOn ? on(target) : off(target))
+	set: (target, isOn, options) => (isOn ? on(target, options) : off(target, options))
 };
 
-/** Per-outlet control for multi-outlet strips (HS300, KP200). */
+/**
+ * Per-outlet control for multi-outlet strips (HS300, KP200).
+ * `confirm` is a no-op here — child relay state isn't read-back-verified.
+ */
 export const children: PlugApi["children"] = {
-	set: (target, childIds, isOn) =>
+	set: (target, childIds, isOn /*, options */) =>
 		self.events.run("plug.children.set", target, [childIds, isOn], () => {
 			if (childIds.length === 0) throw new Error("children.set requires at least one child id");
 			return sendRelay(target, isOn ? 1 : 0, childIds);

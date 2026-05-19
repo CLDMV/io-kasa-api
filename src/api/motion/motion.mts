@@ -83,28 +83,46 @@ function assertIndex(index: number, label: string): void {
 /** Motion (PIR) sensor. `get` reads the config; `set` enables/disables. */
 export const pir: MotionApi["pir"] = {
 	get: (target) => self.events.run("motion.pir.get", target, [], () => rawPir(target)),
-	set: (target, enabled) =>
-		self.events.run("motion.pir.set", target, [enabled], async () => {
-			const response = await self.protocol.send(target, { [PIR]: { set_enable: { enable: enabled ? 1 : 0 } } });
-			return unwrap(response, PIR, "set_enable");
-		}),
+	set: (target, enabled, options) =>
+		self.events.run(
+			"motion.pir.set",
+			target,
+			[enabled],
+			async () => {
+				const response = await self.protocol.send(target, { [PIR]: { set_enable: { enable: enabled ? 1 : 0 } } });
+				return unwrap(response, PIR, "set_enable");
+			},
+			{ confirm: options?.confirm, verify: async () => (await rawPir(target)).enable === (enabled ? 1 : 0) }
+		),
 	sensitivity: {
 		get: (target) => self.events.run("motion.pir.sensitivity.get", target, [], async () => (await rawPir(target)).trigger_index),
-		set: (target, index) =>
-			self.events.run("motion.pir.sensitivity.set", target, [index], async () => {
-				assertIndex(index, "sensitivity index");
-				const response = await self.protocol.send(target, { [PIR]: { set_trigger_index: { index } } });
-				return unwrap(response, PIR, "set_trigger_index");
-			})
+		set: (target, index, options) =>
+			self.events.run(
+				"motion.pir.sensitivity.set",
+				target,
+				[index],
+				async () => {
+					assertIndex(index, "sensitivity index");
+					const response = await self.protocol.send(target, { [PIR]: { set_trigger_index: { index } } });
+					return unwrap(response, PIR, "set_trigger_index");
+				},
+				{ confirm: options?.confirm, verify: async () => (await rawPir(target)).trigger_index === index }
+			)
 	},
 	cooldown: {
 		get: (target) => self.events.run("motion.pir.cooldown.get", target, [], async () => (await rawPir(target)).cold_time),
-		set: (target, ms) =>
-			self.events.run("motion.pir.cooldown.set", target, [ms], async () => {
-				if (ms < 0) throw new RangeError(`cooldown must be >= 0, got ${ms}`);
-				const response = await self.protocol.send(target, { [PIR]: { set_cold_time: { cold_time: Math.round(ms) } } });
-				return unwrap(response, PIR, "set_cold_time");
-			})
+		set: (target, ms, options) =>
+			self.events.run(
+				"motion.pir.cooldown.set",
+				target,
+				[ms],
+				async () => {
+					if (ms < 0) throw new RangeError(`cooldown must be >= 0, got ${ms}`);
+					const response = await self.protocol.send(target, { [PIR]: { set_cold_time: { cold_time: Math.round(ms) } } });
+					return unwrap(response, PIR, "set_cold_time");
+				},
+				{ confirm: options?.confirm, verify: async () => (await rawPir(target)).cold_time === Math.round(ms) }
+			)
 	},
 	adc: {
 		get: (target) =>
@@ -127,19 +145,31 @@ export const ambient: MotionApi["ambient"] = {
 	get: (target) => self.events.run("motion.ambient.get", target, [], () => rawAmbient(target)),
 	enabled: {
 		get: (target) => self.events.run("motion.ambient.enabled.get", target, [], async () => (await rawAmbient(target)).enable === 1),
-		set: (target, enabled) =>
-			self.events.run("motion.ambient.enabled.set", target, [enabled], async () => {
-				const response = await self.protocol.send(target, { [LAS]: { set_enable: { enable: enabled ? 1 : 0 } } });
-				return unwrap(response, LAS, "set_enable");
-			})
+		set: (target, enabled, options) =>
+			self.events.run(
+				"motion.ambient.enabled.set",
+				target,
+				[enabled],
+				async () => {
+					const response = await self.protocol.send(target, { [LAS]: { set_enable: { enable: enabled ? 1 : 0 } } });
+					return unwrap(response, LAS, "set_enable");
+				},
+				{ confirm: options?.confirm, verify: async () => (await rawAmbient(target)).enable === (enabled ? 1 : 0) }
+			)
 	},
 	darkThreshold: {
 		get: (target) => self.events.run("motion.ambient.darkThreshold.get", target, [], async () => (await rawAmbient(target)).dark_index),
-		set: (target, index) =>
-			self.events.run("motion.ambient.darkThreshold.set", target, [index], async () => {
-				assertIndex(index, "dark threshold index");
-				const response = await self.protocol.send(target, { [LAS]: { set_dark_index: { index } } });
-				return unwrap(response, LAS, "set_dark_index");
-			})
+		set: (target, index, options) =>
+			self.events.run(
+				"motion.ambient.darkThreshold.set",
+				target,
+				[index],
+				async () => {
+					assertIndex(index, "dark threshold index");
+					const response = await self.protocol.send(target, { [LAS]: { set_dark_index: { index } } });
+					return unwrap(response, LAS, "set_dark_index");
+				},
+				{ confirm: options?.confirm, verify: async () => (await rawAmbient(target)).dark_index === index }
+			)
 	}
 };

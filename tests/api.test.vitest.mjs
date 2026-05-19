@@ -584,6 +584,131 @@ describe("api.events", () => {
     expect(ev.ok).toBe(false);
     expect(ev.reachable).toBe(false);
   });
+
+  it("emits the specific (leaf) action event", async () => {
+    const server = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
+    try {
+      const leafSeen = nextOp("on", (e) => e.op === "plug.on");
+      await api.plug.on({ host: "127.0.0.1", port: server.port });
+      expect((await leafSeen).op).toBe("plug.on");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("matches a glob against the op path", async () => {
+    const server = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
+    try {
+      const globSeen = nextOp("plug.*", (e) => e.op === "plug.on");
+      await api.plug.on({ host: "127.0.0.1", port: server.port });
+      expect((await globSeen).op).toBe("plug.on");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("off() removes a glob listener", async () => {
+    const server = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
+    try {
+      let hits = 0;
+      const handler = () => hits++;
+      api.events.on("plug.*", handler);
+      api.events.off("plug.*", handler);
+      await api.plug.on({ host: "127.0.0.1", port: server.port });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(hits).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("api.events — confirm (verified writes)", () => {
+  /** Build a fake device that acks `set_relay_state` and reports `relayState` from sysinfo. */
+  const fakeRelay = (relayStateRef) =>
+    startFakeTcp((cmd) => {
+      if (cmd.system?.set_relay_state) {
+        if (relayStateRef.applyOnSet) relayStateRef.value = cmd.system.set_relay_state.state;
+        return { system: { set_relay_state: { err_code: 0 } } };
+      }
+      if (cmd.system?.get_sysinfo) return { system: { get_sysinfo: { relay_state: relayStateRef.value } } };
+      return { err: 1 };
+    });
+
+  it("default: no verification, the set resolves ok:true even if the device reports a stale state", async () => {
+    const ref = { value: 0, applyOnSet: false }; // sysinfo lies: still says 0 after on
+    const server = await fakeRelay(ref);
+    try {
+      const r = await api.switch.on({ host: "127.0.0.1", port: server.port });
+      expect(r.ok).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("per-call confirm:true with a mismatch → ok:false (unconfirmed)", async () => {
+    const ref = { value: 0, applyOnSet: false };
+    const server = await fakeRelay(ref);
+    try {
+      const r = await api.switch.on({ host: "127.0.0.1", port: server.port }, { confirm: true });
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/unconfirmed/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("per-call confirm:true with a matching read-back → ok:true", async () => {
+    const ref = { value: 0, applyOnSet: true };
+    const server = await fakeRelay(ref);
+    try {
+      const r = await api.switch.on({ host: "127.0.0.1", port: server.port }, { confirm: true });
+      expect(r.ok).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("target.confirm:true propagates when no per-call option is given", async () => {
+    const ref = { value: 0, applyOnSet: false };
+    const server = await fakeRelay(ref);
+    try {
+      const r = await api.switch.on({ host: "127.0.0.1", port: server.port, confirm: true });
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/unconfirmed/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("per-call confirm overrides target.confirm (precedence: per-call > target)", async () => {
+    const ref = { value: 0, applyOnSet: false };
+    const server = await fakeRelay(ref);
+    try {
+      // target asks to confirm; per-call says don't — and the read-back would mismatch.
+      const r = await api.switch.on(
+        { host: "127.0.0.1", port: server.port, confirm: true },
+        { confirm: false }
+      );
+      expect(r.ok).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("createKasaApi({ confirm: true }) sets the global default (precedence: target/per-call > global)", async () => {
+    const dapi = await createKasaApi({ confirm: true });
+    const ref = { value: 0, applyOnSet: false };
+    const server = await fakeRelay(ref);
+    try {
+      const r = await dapi.switch.on({ host: "127.0.0.1", port: server.port });
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/unconfirmed/);
+    } finally {
+      await server.close();
+      await dapi.slothlet?.shutdown?.();
+    }
+  });
 });
 
 describe("api.bulk", () => {

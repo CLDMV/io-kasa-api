@@ -54,7 +54,8 @@ export const stats: EnergyApi["stats"] = {
 				return result.month_list ?? [];
 			})
 	},
-	erase: (target) =>
+	// `confirm` is accepted but a no-op — the device exposes no clean read-back for cleared counters.
+	erase: (target, _options) =>
 		self.events.run("energy.stats.erase", target, [], async () => {
 			const response = await self.protocol.send(target, { [NS]: { erase_emeter_stat: {} } });
 			return unwrap(response, "erase_emeter_stat");

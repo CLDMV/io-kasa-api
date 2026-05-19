@@ -40,6 +40,13 @@ export interface CreateKasaApiOptions {
   bulkConcurrency?: number;
   /** CIDR the `api.devices` resolver sweeps. Defaults to `KASA_SWEEP` env or `10.8.0.0/23`. */
   sweepCidr?: string;
+  /**
+   * Global default for verified writes. When `true`, every mutating command
+   * reads the value back and resolves `ok: false` if it doesn't match. Can be
+   * overridden per-target (`{ host, confirm: false }`) and per-call
+   * (`api.switch.on(t, { confirm: true })`). Defaults to `false`.
+   */
+  confirm?: boolean;
 }
 
 /** The fully built Kasa API surface, plus the dynamic layers and slothlet's handle. */
@@ -73,6 +80,8 @@ export async function createKasaApi(options: CreateKasaApiOptions = {}): Promise
   } as Parameters<typeof slothlet>[0]);
 
   const api = built as unknown as KasaApi;
+  // Wire bus-level defaults (the global confirm/verified-write toggle).
+  if (typeof options.confirm === "boolean") api.events.configure({ confirm: options.confirm });
   // Attach the dynamic meta-layers (built by walking the loaded API).
   api.bulk = buildBulk(api as unknown as Record<string, Record<string, unknown>>, options.bulkConcurrency);
   api.signal = buildSignal(api as unknown as Parameters<typeof buildSignal>[0]);
@@ -86,6 +95,7 @@ export async function createKasaApi(options: CreateKasaApiOptions = {}): Promise
 export type {
   DeviceTarget,
   DeviceRef,
+  CommandOptions,
   SendOptions,
   KasaCommand,
   KasaResponse,

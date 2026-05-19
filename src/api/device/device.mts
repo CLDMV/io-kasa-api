@@ -6,7 +6,7 @@
  * and never throws; failures surface as `ok: false` and an `"error"` event.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type { DeviceApi, DeviceTarget, OpResult, SelfApi, SysInfo } from "../../lib/types.mts";
+import type { CommandOptions, DeviceApi, DeviceTarget, OpResult, SelfApi, SysInfo } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 
@@ -40,26 +40,41 @@ export const info: DeviceApi["info"] = {
 /** Device alias / display name. */
 export const alias: DeviceApi["alias"] = {
 	get: (target) => self.events.run("device.alias.get", target, [], async () => (await rawSysInfo(target)).alias),
-	set: (target, value) =>
-		self.events.run("device.alias.set", target, [value], async () => {
-			const response = await self.protocol.send(target, { system: { set_dev_alias: { alias: value } } });
-			return unwrap(response, "system", "set_dev_alias");
-		})
+	set: (target, value, options) =>
+		self.events.run(
+			"device.alias.set",
+			target,
+			[value],
+			async () => {
+				const response = await self.protocol.send(target, { system: { set_dev_alias: { alias: value } } });
+				return unwrap(response, "system", "set_dev_alias");
+			},
+			{ confirm: options?.confirm, verify: async () => (await rawSysInfo(target)).alias === value }
+		)
 };
 
 /** Status LED. `get`/`set` are in terms of LED-on; the device stores the inverse (`led_off`). */
 export const led: DeviceApi["led"] = {
 	get: (target) =>
 		self.events.run("device.led.get", target, [], async () => (await rawSysInfo(target)).led_off !== 1),
-	set: (target, on) =>
-		self.events.run("device.led.set", target, [on], async () => {
-			const response = await self.protocol.send(target, { system: { set_led_off: { off: on ? 0 : 1 } } });
-			return unwrap(response, "system", "set_led_off");
-		})
+	set: (target, on, options) =>
+		self.events.run(
+			"device.led.set",
+			target,
+			[on],
+			async () => {
+				const response = await self.protocol.send(target, { system: { set_led_off: { off: on ? 0 : 1 } } });
+				return unwrap(response, "system", "set_led_off");
+			},
+			{ confirm: options?.confirm, verify: async () => (await rawSysInfo(target)).led_off === (on ? 0 : 1) }
+		)
 };
 
-/** Reboot the device. Default delay is 1 second (matches the official app). */
-export function reboot(target: DeviceTarget, delaySec = 1): Promise<OpResult> {
+/**
+ * Reboot the device. Default delay is 1 second (matches the official app).
+ * `confirm` is a no-op here — the device is rebooting and won't respond to a read-back.
+ */
+export function reboot(target: DeviceTarget, delaySec = 1, _options?: CommandOptions): Promise<OpResult> {
 	return self.events.run("device.reboot", target, [delaySec], async () => {
 		const response = await self.protocol.send(target, { system: { reboot: { delay: delaySec } } });
 		return unwrap(response, "system", "reboot");
