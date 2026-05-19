@@ -15,14 +15,12 @@ import type { DeviceTarget, KasaApi } from "../src/index.mts";
  */
 export async function resolveOrExit(api: KasaApi, ref: string): Promise<DeviceTarget> {
 	process.stdout.write(`Resolving "${ref}" ... `);
-	let target: DeviceTarget;
-	try {
-		target = await api.devices.resolve(ref);
-	} catch {
+	const target = await api.devices.resolve(ref);
+	if (target === null) {
 		console.log("not found");
 		// The sweep already ran (resolve populated the cache) — show what it saw,
 		// so a typo or wrong name is obvious.
-		const devices = await api.devices.list().catch(() => []);
+		const devices = await api.devices.list();
 		if (devices.length === 0) {
 			console.error("No Kasa devices found — check the CIDR (KASA_SWEEP env) and connectivity.");
 		} else {

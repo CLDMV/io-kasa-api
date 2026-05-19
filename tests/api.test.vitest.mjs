@@ -834,12 +834,16 @@ describe("api.discovery — sweep (unicast CIDR scan)", () => {
     }
   });
 
-  it("refuses to sweep an unreasonably large range", async () => {
-    await expect(api.discovery.sweep("10.0.0.0/8")).rejects.toThrow(/refusing to sweep/);
+  it("an unreasonably large range resolves to [] (and fires an error event)", async () => {
+    const errSeen = nextOp("discovery.sweep", (e) => e.ok === false);
+    expect(await api.discovery.sweep("10.0.0.0/8")).toEqual([]);
+    expect((await errSeen).error).toMatch(/refusing to sweep/);
   });
 
-  it("rejects a malformed CIDR", async () => {
-    await expect(api.discovery.sweep("10.8.1.0")).rejects.toThrow(/Invalid CIDR/);
+  it("a malformed CIDR resolves to [] (and fires an error event)", async () => {
+    const errSeen = nextOp("discovery.sweep", (e) => e.ok === false);
+    expect(await api.discovery.sweep("10.8.1.0")).toEqual([]);
+    expect((await errSeen).error).toMatch(/Invalid CIDR/);
   });
 });
 
@@ -874,14 +878,14 @@ describe("api.devices — resolver + cache", () => {
     }
   });
 
-  it("resolve() rejects a name that isn't in the cache", async () => {
+  it("resolve() returns null (never throws) when a name isn't in the cache", async () => {
     const a = await startFakeTcp(
       () => ({ system: { get_sysinfo: { alias: "Known", mac: "AA:BB:CC:00:00:09" } } }),
       { host: "127.0.0.2" }
     );
     try {
       await api.devices.refresh({ cidr: "127.0.0.2/32", port: a.port, timeoutMs: 500 });
-      await expect(api.devices.resolve("Nonexistent")).rejects.toThrow(/No Kasa device matching/);
+      expect(await api.devices.resolve("Nonexistent")).toBeNull();
     } finally {
       await a.close();
     }

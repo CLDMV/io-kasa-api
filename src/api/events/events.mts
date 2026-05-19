@@ -188,3 +188,47 @@ export async function run<T>(
 	if (channel !== "error" || bus.listenerCount("error") > 0) bus.emit(channel, event);
 	return result;
 }
+
+/**
+ * Run a unit of work that is **not** addressed to a device — i.e. discovery
+ * and devices-cache operations. Same event-emitting / no-throw contract as
+ * {@link run}, but the emitted {@link OpEvent} has no `target`/`host` and the
+ * function resolves to the raw value (or `fallback` on failure) rather than
+ * an `OpResult`.
+ */
+export async function runUntargeted<T>(op: string, args: unknown[], work: () => Promise<T> | T, fallback: T): Promise<T> {
+	const started = Date.now();
+	const dot = op.indexOf(".");
+	const module = dot < 0 ? op : op.slice(0, dot);
+	const method = dot < 0 ? "" : op.slice(dot + 1);
+	const action = op.slice(op.lastIndexOf(".") + 1);
+
+	let event: OpEvent<T>;
+	let returnValue: T;
+	try {
+		const value = await work();
+		returnValue = value;
+		event = { ok: true, op, value, args, module, method, durationMs: Date.now() - started, at: Date.now() };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		returnValue = fallback;
+		event = {
+			ok: false,
+			op,
+			error: message,
+			reachable: !UNREACHABLE.test(message),
+			args,
+			module,
+			method,
+			durationMs: Date.now() - started,
+			at: Date.now()
+		};
+	}
+
+	bus.emit("op", event);
+	bus.emit(op, event);
+	if (action && action !== op) bus.emit(action, event);
+	const channel = event.ok ? "success" : "error";
+	if (channel !== "error" || bus.listenerCount("error") > 0) bus.emit(channel, event);
+	return returnValue;
+}

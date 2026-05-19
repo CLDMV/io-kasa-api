@@ -163,16 +163,16 @@ if (broadcast) opts.broadcast = broadcast;
 if (bindAddress) opts.bindAddress = bindAddress;
 if (maxDevices !== undefined) opts.maxDevices = maxDevices;
 
-try {
-  const resolved = resolveBroadcast(baseIp);
+const resolved = await resolveBroadcast(baseIp);
+if (resolved) {
   console.error(
     `Using interface=${resolved.interface} bind=${bindAddress ?? resolved.bindAddress} ` +
       `broadcast=${broadcast ?? resolved.broadcast} port=${port} timeoutMs=${timeoutMs}` +
       (maxDevices !== undefined ? ` maxDevices=${maxDevices}` : "")
   );
-} catch (err) {
+} else {
   console.error(
-    `Interface auto-detect failed (${(err as Error).message}); ` +
+    `Interface auto-detect failed; ` +
       `using bind=${bindAddress ?? "<os pick>"} broadcast=${broadcast ?? "255.255.255.255"} ` +
       `port=${port} timeoutMs=${timeoutMs}`
   );

@@ -96,16 +96,12 @@ function listIPv4Interfaces(getInterfaces: GetInterfacesFn): Array<{
 }
 
 /**
- * Resolve a broadcast address to use for UDP discovery.
- *
- * Precedence:
- *   1. `baseIp` supplied and matching an interface → that interface's directed broadcast.
- *   2. `baseIp` supplied but unmatched → accept it as a literal bind address, assume /24.
- *   3. No `baseIp` → first non-internal IPv4 interface and its directed broadcast.
- *
- * Throws if no candidate is available (host has only loopback).
+ * Sync resolver — throws if no candidate interface exists. Exported for
+ * tests that want to assert behaviour without the slothlet runtime; the
+ * public {@link resolveBroadcast} wraps this in `runUntargeted` so callers
+ * see a no-throw `ResolvedBroadcast | null` instead.
  */
-export function resolveBroadcast(baseIp?: string, getInterfaces: GetInterfacesFn = networkInterfaces): ResolvedBroadcast {
+export function resolveBroadcastSync(baseIp?: string, getInterfaces: GetInterfacesFn = networkInterfaces): ResolvedBroadcast {
 	const interfaces = listIPv4Interfaces(getInterfaces);
 
 	if (baseIp) {
@@ -140,13 +136,39 @@ export function resolveBroadcast(baseIp?: string, getInterfaces: GetInterfacesFn
 // --- Discovery -----------------------------------------------------------------
 
 /**
+ * Resolve a broadcast address to use for UDP discovery. Never throws — resolves
+ * to `null` (and emits an `error` event) when no usable interface exists.
+ *
+ * Precedence:
+ *   1. `baseIp` supplied and matching an interface → that interface's directed broadcast.
+ *   2. `baseIp` supplied but unmatched → accept it as a literal bind address, assume /24.
+ *   3. No `baseIp` → first non-internal IPv4 interface and its directed broadcast.
+ */
+export async function resolveBroadcast(
+	baseIp?: string,
+	getInterfaces: GetInterfacesFn = networkInterfaces
+): Promise<ResolvedBroadcast | null> {
+	return self.events.runUntargeted(
+		"discovery.resolveBroadcast",
+		[baseIp],
+		() => resolveBroadcastSync(baseIp, getInterfaces),
+		null
+	);
+}
+
+/**
  * Discover Kasa devices on the local network.
  *
  * Returns whatever has responded by the time the listen window expires
  * (or `maxDevices` is reached). Duplicate responses from the same host
- * are deduplicated by `host:port`.
+ * are deduplicated by `host:port`. Never throws — resolves to `[]` on
+ * failure and emits an `error` event.
  */
 export async function discover(options: DiscoverOptions = {}): Promise<DiscoveredDevice[]> {
+	return self.events.runUntargeted("discovery.discover", [options], () => discoverImpl(options), []);
+}
+
+async function discoverImpl(options: DiscoverOptions): Promise<DiscoveredDevice[]> {
 	const port = options.port ?? DEFAULT_PORT;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const maxDevices = options.maxDevices ?? Infinity;
@@ -155,7 +177,7 @@ export async function discover(options: DiscoverOptions = {}): Promise<Discovere
 	let bindAddress = options.bindAddress;
 	if (!broadcast || !bindAddress) {
 		try {
-			const resolved = resolveBroadcast(options.baseIp);
+			const resolved = resolveBroadcastSync(options.baseIp);
 			broadcast ??= resolved.broadcast;
 			bindAddress ??= resolved.bindAddress;
 		} catch (err) {
@@ -252,9 +274,16 @@ function cidrHosts(cidr: string): string[] {
  * is an ordinary routed TCP connection rather than a broadcast. Hosts that
  * don't answer (no device, wrong port, timeout) are silently skipped.
  *
+ * Never throws — resolves to `[]` on a bad CIDR / oversized range and emits
+ * an `error` event.
+ *
  * @param cidr - Range to scan, e.g. `"10.8.1.0/24"`.
  */
 export async function sweep(cidr: string, options: SweepOptions = {}): Promise<DiscoveredDevice[]> {
+	return self.events.runUntargeted("discovery.sweep", [cidr, options], () => sweepImpl(cidr, options), []);
+}
+
+async function sweepImpl(cidr: string, options: SweepOptions): Promise<DiscoveredDevice[]> {
 	const port = options.port ?? DEFAULT_PORT;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_SWEEP_TIMEOUT_MS;
 	const concurrency = Math.max(1, options.concurrency ?? DEFAULT_SWEEP_CONCURRENCY);

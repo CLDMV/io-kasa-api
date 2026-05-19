@@ -46,9 +46,10 @@ function mirror(node: Node, concurrency: number, path: string): Node {
 		if (typeof value === "function") {
 			const fn = value as Leaf;
 			out[key] = (targets: DeviceTarget[], ...rest: unknown[]): Promise<OpResult[]> => {
-				if (!Array.isArray(targets)) {
-					throw new TypeError(`api.bulk.${childPath}: first argument must be a DeviceTarget[]`);
-				}
+				// No-throw: a non-array first arg resolves to an empty batch
+				// (childPath is captured for any future event hook).
+				void childPath;
+				if (!Array.isArray(targets)) return Promise.resolve([]);
 				return pool(targets, concurrency, (t) => fn(t, ...rest));
 			};
 		} else if (value && typeof value === "object") {

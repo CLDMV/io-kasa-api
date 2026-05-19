@@ -77,11 +77,33 @@ export interface OpResult<T = unknown> {
 	durationMs: number;
 }
 
-/** Payload of an `api.events` event — an {@link OpResult} plus dispatch detail. */
-export interface OpEvent<T = unknown> extends OpResult<T> {
-	/** Module name, e.g. `"plug"`. */
+/**
+ * Payload of an `api.events` event — the result of one operation plus dispatch
+ * detail.
+ *
+ * For device commands `target` and `host` are always present; for non-device
+ * operations (`discovery.*` and `devices.*`) they are absent.
+ */
+export interface OpEvent<T = unknown> {
+	/** Did the operation succeed? */
+	ok: boolean;
+	/** Operation path, e.g. `"plug.on"`, `"discovery.sweep"`. */
+	op: string;
+	/** Device target — present for device commands, absent for discovery/devices ops. */
+	target?: DeviceTarget;
+	/** Convenience alias for `target.host` — present for device commands. */
+	host?: string;
+	/** Resolved value when `ok`. */
+	value?: T;
+	/** Error message when `!ok`. */
+	error?: string;
+	/** `false` when the failure was a connectivity error. */
+	reachable?: boolean;
+	/** Wall-clock duration of the operation in ms. */
+	durationMs: number;
+	/** Module name, e.g. `"plug"`, `"discovery"`. */
 	module: string;
-	/** Method name, e.g. `"on"`. */
+	/** Method name, e.g. `"on"`, `"sweep"`. */
 	method: string;
 	/** Arguments passed beyond the target. */
 	args: unknown[];
@@ -421,15 +443,23 @@ export interface ProtocolApi {
 }
 
 export interface DiscoveryApi {
-	/** Broadcast discovery — local subnet only (broadcasts don't cross routers). */
+	/**
+	 * Broadcast discovery — local subnet only (broadcasts don't cross routers).
+	 * Never throws — resolves to `[]` on failure and emits an `error` event.
+	 */
 	discover(options?: DiscoverOptions): Promise<DiscoveredDevice[]>;
 	/**
 	 * Unicast CIDR sweep — probes every host in `cidr` with a TCP `get_sysinfo`.
 	 * Works across subnets/VLANs since each probe is a routed unicast connection.
+	 * Never throws — resolves to `[]` on a bad CIDR / oversized range and emits
+	 * an `error` event.
 	 */
 	sweep(cidr: string, options?: SweepOptions): Promise<DiscoveredDevice[]>;
-	/** Resolve the broadcast/bind addresses discovery would use for a given base IP. */
-	resolveBroadcast(baseIp?: string): ResolvedBroadcast;
+	/**
+	 * Resolve the broadcast/bind addresses discovery would use for a given base
+	 * IP. Returns `null` (instead of throwing) when no usable interface exists.
+	 */
+	resolveBroadcast(baseIp?: string): ResolvedBroadcast | null;
 }
 
 /**
@@ -476,6 +506,13 @@ export interface EventsApi {
 		work: () => Promise<T> | T,
 		opts?: { verify?: (() => Promise<boolean>) | undefined; confirm?: boolean | undefined }
 	): Promise<OpResult<T>>;
+	/**
+	 * Run an operation that isn't addressed to a device (discovery, devices).
+	 * Same event/no-throw contract as {@link run}, but the emitted event has
+	 * no `target`/`host` and the function resolves to the raw value (or the
+	 * supplied `fallback` on failure) rather than an `OpResult`.
+	 */
+	runUntargeted<T>(op: string, args: unknown[], work: () => Promise<T> | T, fallback: T): Promise<T>;
 }
 
 /** Read-only resource leaf. */
@@ -701,9 +738,10 @@ export interface DevicesApi {
 	/**
 	 * Resolve a MAC / alias (name) / IP — or a {@link DeviceTarget} passthrough —
 	 * to a {@link DeviceTarget}. An IP resolves directly; a MAC or name is looked
-	 * up in the cached sweep. Rejects if a MAC/name isn't in the cache.
+	 * up in the cached sweep. Resolves to `null` (never throws) when a MAC/name
+	 * isn't in the cache after a re-sweep; emits a `devices.resolve` event.
 	 */
-	resolve(ref: DeviceRef): Promise<DeviceTarget>;
+	resolve(ref: DeviceRef): Promise<DeviceTarget | null>;
 	/** Look up the full {@link DiscoveredDevice} for a ref; `undefined` if not cached. */
 	find(ref: DeviceRef): Promise<DiscoveredDevice | undefined>;
 	/** Cached device list — sweeps once on first use, then serves the cache. */

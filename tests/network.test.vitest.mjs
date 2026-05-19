@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveBroadcast } from "../src/api/discovery/discovery.mts";
+import { resolveBroadcastSync as resolveBroadcast } from "../src/api/discovery/discovery.mts";
 
 /** @typedef {import("node:os").NetworkInterfaceInfo} NIInfo */
 
@@ -49,7 +49,7 @@ describe("resolveBroadcast", () => {
     expect(r.cidr).toBe(24);
   });
 
-  it("skips loopback and link-local interfaces", () => {
+  it("the sync impl throws on link-local only (the async wrapper turns this into null)", () => {
     const onlyLinkLocal = fakeOs({
       lo: [
         { address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" }
@@ -61,7 +61,7 @@ describe("resolveBroadcast", () => {
     expect(() => resolveBroadcast(undefined, onlyLinkLocal)).toThrow(/No usable IPv4 interface/);
   });
 
-  it("throws an informative error when only loopback is present", () => {
+  it("the sync impl throws when only loopback is present", () => {
     const loopbackOnly = fakeOs({
       lo: [
         { address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" }

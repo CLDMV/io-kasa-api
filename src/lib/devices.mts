@@ -6,9 +6,13 @@
  * and cached, so a long-running app can resolve repeatedly without re-scanning
  * the network on every command. `refresh()` re-scans on demand.
  *
+ * Every method goes through `api.events.runUntargeted` — they never throw, and
+ * each emits a `devices.<method>` event on the bus (plus the catch-all tiers).
+ * On a cache miss `find`/`resolve` re-sweep once before giving up.
+ *
  * Imported by `index.mts` (the entry), not loaded by slothlet.
  */
-import type { DeviceRef, DeviceTarget, DevicesApi, DevicesScanOptions, DiscoveredDevice } from "./types.mts";
+import type { DeviceRef, DeviceTarget, DevicesApi, DevicesScanOptions, DiscoveredDevice, EventsApi } from "./types.mts";
 
 /** Network this project's devices live on — used when no `sweepCidr` is given. */
 const DEFAULT_CIDR = "10.8.0.0/23";
@@ -22,6 +26,7 @@ const SWEEP_DEFAULTS = { timeoutMs: 1500, concurrency: 128 };
 
 type AnyApi = {
 	discovery: { sweep(cidr: string, options?: Record<string, unknown>): Promise<DiscoveredDevice[]> };
+	events: EventsApi;
 };
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
@@ -44,7 +49,7 @@ function isMac(s: string): boolean {
 /**
  * Build the `api.devices` resolver/cache from the live API object.
  *
- * @param api - The built API (needs `discovery.sweep`).
+ * @param api - The built API (needs `discovery.sweep` and `events.runUntargeted`).
  * @param defaultCidr - CIDR swept when a scan is needed and none is specified.
  */
 export function buildDevices(api: AnyApi, defaultCidr: string = DEFAULT_CIDR): DevicesApi {
@@ -54,17 +59,18 @@ export function buildDevices(api: AnyApi, defaultCidr: string = DEFAULT_CIDR): D
 	/** Options of the most recent sweep — reused for the on-miss retry. */
 	let lastScan: DevicesScanOptions = {};
 
-	async function sweep(options: DevicesScanOptions): Promise<DiscoveredDevice[]> {
+	/** Private: actual sweep + cache write. No event (the caller emits). */
+	async function sweepInternal(options: DevicesScanOptions): Promise<DiscoveredDevice[]> {
 		lastScan = options;
 		const { cidr = defaultCidr, ...sweepOptions } = options;
 		cache = await api.discovery.sweep(cidr, { ...SWEEP_DEFAULTS, ...sweepOptions });
 		return cache;
 	}
 
-	/** Cached device list — sweeps once on first use. */
-	async function list(options: DevicesScanOptions = {}): Promise<DiscoveredDevice[]> {
+	/** Private: cached list with first-call sweep. */
+	async function listInternal(options: DevicesScanOptions): Promise<DiscoveredDevice[]> {
 		if (cache !== null) return cache;
-		if (!inflight) inflight = sweep(options).finally(() => (inflight = null));
+		if (!inflight) inflight = sweepInternal(options).finally(() => (inflight = null));
 		return inflight;
 	}
 
@@ -80,34 +86,33 @@ export function buildDevices(api: AnyApi, defaultCidr: string = DEFAULT_CIDR): D
 		return devices.find((d) => String(d.sysInfo.alias ?? "").trim().toLowerCase() === want);
 	}
 
-	/**
-	 * Find the full DiscoveredDevice for a ref. On a cache miss it re-sweeps
-	 * once — so a newly-added device, or one a congested network dropped from
-	 * the previous probe, still resolves without the caller knowing.
-	 */
-	async function find(ref: DeviceRef): Promise<DiscoveredDevice | undefined> {
-		const hit = lookup(await list(), ref);
+	/** Private: find with one auto re-sweep on a cache miss. */
+	async function findInternal(ref: DeviceRef): Promise<DiscoveredDevice | undefined> {
+		const hit = lookup(await listInternal({}), ref);
 		if (hit) return hit;
-		return lookup(await sweep(lastScan), ref);
+		return lookup(await sweepInternal(lastScan), ref);
 	}
 
 	return {
-		list,
-		find,
-		refresh: (options: DevicesScanOptions = {}) => sweep(options),
-		async resolve(ref: DeviceRef): Promise<DeviceTarget> {
-			// An explicit target passes straight through (keeps port / timeoutMs).
-			if (typeof ref !== "string") return ref;
-			// A bare IP needs no lookup.
-			if (isIpv4(ref)) return { host: ref };
-			const device = await find(ref);
-			if (!device) {
-				throw new Error(
-					`No Kasa device matching "${ref}" — not found on the network (swept twice). ` +
-						`It may be offline, on another subnet, or not speak the legacy port-9999 protocol.`
-				);
-			}
-			return { host: device.host };
-		}
+		list: (options: DevicesScanOptions = {}) =>
+			api.events.runUntargeted("devices.list", [options], () => listInternal(options), [] as DiscoveredDevice[]),
+		refresh: (options: DevicesScanOptions = {}) =>
+			api.events.runUntargeted("devices.refresh", [options], () => sweepInternal(options), [] as DiscoveredDevice[]),
+		find: (ref: DeviceRef) =>
+			api.events.runUntargeted<DiscoveredDevice | undefined>("devices.find", [ref], () => findInternal(ref), undefined),
+		resolve: (ref: DeviceRef) =>
+			api.events.runUntargeted<DeviceTarget | null>(
+				"devices.resolve",
+				[ref],
+				async () => {
+					// An explicit target passes straight through (keeps port / timeoutMs).
+					if (typeof ref !== "string") return ref;
+					// A bare IP needs no lookup.
+					if (isIpv4(ref)) return { host: ref };
+					const device = await findInternal(ref);
+					return device ? { host: device.host } : null;
+				},
+				null
+			)
 	};
 }
