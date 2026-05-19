@@ -5,11 +5,11 @@
  * starting from seed 0xAB. TCP frames are length-prefixed (4-byte BE);
  * UDP datagrams are not.
  *
- * Self-contained on purpose: the cipher is inlined rather than imported
- * from a sibling module. Slothlet transpiles each `.mts` to its own cache
- * file, so relative imports between API modules don't resolve — and the
- * cipher returns `Buffer`s, which slothlet's wrapper proxies (breaking
- * `TypedArray.length`) if passed across the `self` boundary.
+ * This module owns the cipher and exports it; other API modules reach it
+ * via `self.protocol` rather than a relative import (slothlet transpiles
+ * each `.mts` to its own flat cache file, so sibling imports don't
+ * resolve). Slothlet 3.6.0+ no longer proxy-wraps `Buffer`s crossing the
+ * `self` boundary, so the exported cipher is safe to use across modules.
  */
 import { createConnection } from "node:net";
 import { createSocket } from "node:dgram";

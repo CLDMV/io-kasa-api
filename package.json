@@ -66,7 +66,7 @@
 		"access": "public"
 	},
 	"dependencies": {
-		"@cldmv/slothlet": "^3.5.0",
+		"@cldmv/slothlet": "^3.6.0",
 		"esbuild": "^0.28.0"
 	},
 	"devDependencies": {

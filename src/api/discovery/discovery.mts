@@ -12,9 +12,9 @@
  *   2. computed from `options.baseIp` (matched against this host's interfaces)
  *   3. computed from the host's first non-internal IPv4 interface
  *
- * The UDP cipher is inlined (it returns `Buffer`s, which slothlet's wrapper
- * proxies if passed across `self` — see `protocol/protocol.mts`). `sweep()`
- * goes through `self.protocol.send`, which returns plain JSON and is safe.
+ * The UDP cipher comes from `self.protocol` — slothlet 3.6.0+ no longer
+ * proxy-wraps `Buffer`s crossing the `self` boundary, so the shared cipher
+ * works directly. `sweep()` goes through `self.protocol.send`.
  *
  * Newer KLAP-only devices won't reply on port 9999 (they need port 20002,
  * out of scope here).
@@ -40,33 +40,7 @@ const DEFAULT_SWEEP_TIMEOUT_MS = 1000;
 const DEFAULT_SWEEP_CONCURRENCY = 64;
 /** Refuse to sweep ranges larger than a /16 — bigger scans should be deliberate. */
 const MAX_SWEEP_HOSTS = 65536;
-const XOR_SEED = 0xab;
 const QUERY: Record<string, Record<string, unknown>> = { system: { get_sysinfo: {} } };
-
-// --- UDP autokey cipher (inlined; identical to protocol/protocol.mts) ----------
-
-function encryptUdp(data: string): Buffer {
-	const payload = Buffer.from(data, "utf8");
-	const out = Buffer.alloc(payload.length);
-	let key = XOR_SEED;
-	for (let i = 0; i < payload.length; i++) {
-		const c = key ^ (payload[i] as number);
-		out[i] = c;
-		key = c;
-	}
-	return out;
-}
-
-function decryptUdp(payload: Buffer): string {
-	const out = Buffer.alloc(payload.length);
-	let key = XOR_SEED;
-	for (let i = 0; i < payload.length; i++) {
-		const c = payload[i] as number;
-		out[i] = key ^ c;
-		key = c;
-	}
-	return out.toString("utf8");
-}
 
 // --- Broadcast-address resolution ----------------------------------------------
 
@@ -193,7 +167,7 @@ export async function discover(options: DiscoverOptions = {}): Promise<Discovere
 		}
 	}
 
-	const payload = encryptUdp(JSON.stringify(QUERY));
+	const payload = self.protocol.encryptUdp(JSON.stringify(QUERY));
 	const found = new Map<string, DiscoveredDevice>();
 
 	return await new Promise<DiscoveredDevice[]>((resolve, reject) => {
@@ -212,7 +186,7 @@ export async function discover(options: DiscoverOptions = {}): Promise<Discovere
 		socket.once("error", (err) => finish(err));
 		socket.on("message", (msg, rinfo) => {
 			try {
-				const parsed = JSON.parse(decryptUdp(msg)) as { system?: { get_sysinfo?: SysInfo } };
+				const parsed = JSON.parse(self.protocol.decryptUdp(msg)) as { system?: { get_sysinfo?: SysInfo } };
 				const sysInfo = parsed.system?.get_sysinfo;
 				if (!sysInfo) return;
 				const key = `${rinfo.address}:${rinfo.port}`;
