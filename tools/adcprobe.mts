@@ -19,26 +19,19 @@
  * interval 250ms. Run with the light OFF for a clean reading.
  */
 import { createKasaApi } from "../src/index.mts";
+import { resolveOrExit } from "./_resolve.mts";
 
 const aliasArg = process.argv[2] ?? "Pantry Light";
 const cidr = process.argv[3] ?? process.env.KASA_SWEEP ?? "10.8.0.0/23";
 const intervalMs = Math.max(100, Number(process.argv[4] ?? 250));
 
-const api = await createKasaApi();
+const api = await createKasaApi({ sweepCidr: cidr });
 
-const norm = (s: string): string => s.trim().toLowerCase();
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const ts = (): string => new Date().toLocaleTimeString();
 
-console.log(`Sweeping ${cidr} for "${aliasArg}" ...`);
-const devices = await api.discovery.sweep(cidr, { timeoutMs: 1000, concurrency: 128 });
-const found = devices.find((d) => norm(String(d.sysInfo.alias ?? "")) === norm(aliasArg));
-if (!found) {
-  console.error(`Device "${aliasArg}" not found among ${devices.length} devices on ${cidr}.`);
-  process.exit(1);
-}
-const target = { host: found.host };
-console.log(`Found: "${found.sysInfo.alias}" (${found.sysInfo.model}) at ${found.host}\n`);
+const target = await resolveOrExit(api, aliasArg);
+console.log("");
 
 // Dump everything the PIR and LAS namespaces report.
 console.log("── PIR config (smartlife.iot.PIR get_config) ───────────");

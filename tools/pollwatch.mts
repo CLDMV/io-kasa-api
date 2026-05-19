@@ -16,25 +16,15 @@
  * interval 1000ms.
  */
 import { createKasaApi } from "../src/index.mts";
+import { resolveOrExit } from "./_resolve.mts";
 
 const aliasArg = process.argv[2] ?? "Pantry Light";
 const cidr = process.argv[3] ?? process.env.KASA_SWEEP ?? "10.8.0.0/23";
 const intervalMs = Number(process.argv[4] ?? 1000);
 
-const api = await createKasaApi();
+const api = await createKasaApi({ sweepCidr: cidr });
 
-const norm = (s: string): string => s.trim().toLowerCase();
-
-console.log(`Sweeping ${cidr} for "${aliasArg}" ...`);
-const devices = await api.discovery.sweep(cidr, { timeoutMs: 1000, concurrency: 128 });
-const found = devices.find((d) => norm(String(d.sysInfo.alias ?? "")) === norm(aliasArg));
-if (!found) {
-  console.error(`Device "${aliasArg}" not found among ${devices.length} devices on ${cidr}.`);
-  console.error(`Aliases seen: ${devices.map((d) => d.sysInfo.alias).join(", ")}`);
-  process.exit(1);
-}
-const target = { host: found.host };
-console.log(`Found: "${found.sysInfo.alias}" (${found.sysInfo.model}) at ${found.host}`);
+const target = await resolveOrExit(api, aliasArg);
 console.log(`Polling every ${intervalMs}ms — press Ctrl-C to stop.\n`);
 
 /** Stable JSON for value comparison (sorts object keys). */

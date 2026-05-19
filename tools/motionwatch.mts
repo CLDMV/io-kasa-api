@@ -23,6 +23,7 @@
  * interval 400ms, clear 5000ms.
  */
 import { createKasaApi } from "../src/index.mts";
+import { resolveOrExit } from "./_resolve.mts";
 
 const args = process.argv.slice(2);
 const relayMode = args.includes("--relay");
@@ -39,20 +40,12 @@ const numFlag = (name: string, def: number): number => {
 const intervalMs = numFlag("interval", 400);
 const clearMs = numFlag("clear", 5000);
 
-const api = await createKasaApi();
+const api = await createKasaApi({ sweepCidr: cidr });
 
-const norm = (s: string): string => s.trim().toLowerCase();
 const ts = (): string => new Date().toLocaleTimeString();
 
-console.log(`Sweeping ${cidr} for "${aliasArg}" ...`);
-const devices = await api.discovery.sweep(cidr, { timeoutMs: 1000, concurrency: 128 });
-const found = devices.find((d) => norm(String(d.sysInfo.alias ?? "")) === norm(aliasArg));
-if (!found) {
-  console.error(`Device "${aliasArg}" not found among ${devices.length} devices on ${cidr}.`);
-  process.exit(1);
-}
-const target = { host: found.host };
-console.log(`Found: "${found.sysInfo.alias}" (${found.sysInfo.model}) at ${found.host}\n`);
+const target = await resolveOrExit(api, aliasArg);
+console.log("");
 
 const monitor = relayMode
   ? api.monitor.watch(target, { motion: true, intervalMs: 2000, motionIntervalMs: intervalMs, motionClearMs: clearMs })

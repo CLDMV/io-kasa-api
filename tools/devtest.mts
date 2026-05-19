@@ -1,37 +1,28 @@
 #!/usr/bin/env node
 /**
- * Live device exercise: locate a Kasa device by MAC, then run an
- * on/off + dimming sequence against it, verifying each step.
+ * Live device exercise: locate a Kasa device by MAC or by name (alias),
+ * then run an on/off + dimming sequence against it, verifying each step.
  *
  * Commands never throw — each resolves to an `OpResult`; this script
  * checks `ok` and the device read-back.
  *
  * Usage:
- *   node --experimental-strip-types tools/devtest.mts <MAC> [cidr]
+ *   node --experimental-strip-types tools/devtest.mts <MAC|name> [cidr]
  *
  * Defaults: MAC 1C:61:B4:FF:23:E1, CIDR from KASA_SWEEP or 10.8.0.0/23.
  */
 import { createKasaApi } from "../src/index.mts";
+import { resolveOrExit } from "./_resolve.mts";
 
-const mac = process.argv[2] ?? "1C:61:B4:FF:23:E1";
+const wanted = process.argv[2] ?? "1C:61:B4:FF:23:E1";
 const cidr = process.argv[3] ?? process.env.KASA_SWEEP ?? "10.8.0.0/23";
 
-const normMac = (m: string): string => m.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-const api = await createKasaApi();
+const api = await createKasaApi({ sweepCidr: cidr });
 
-console.log(`Sweeping ${cidr} for ${mac} ...`);
-const devices = await api.discovery.sweep(cidr, { timeoutMs: 1000, concurrency: 128 });
-const found = devices.find(
-  (d) => normMac(String(d.sysInfo.mac ?? d.sysInfo.mic_mac ?? "")) === normMac(mac)
-);
-if (!found) {
-  console.error(`Device ${mac} not found among ${devices.length} devices on ${cidr}.`);
-  process.exit(1);
-}
-const target = { host: found.host };
-console.log(`Found: "${found.sysInfo.alias}" (${found.sysInfo.model}) at ${found.host}\n`);
+const target = await resolveOrExit(api, wanted);
+console.log("");
 
 let pass = 0;
 let fail = 0;
