@@ -4,14 +4,18 @@
 	"description": "Slothlet-powered API module for controlling TP-Link Kasa IoT devices on the local network.",
 	"type": "module",
 	"exports": {
-		".": "./src/index.mts"
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		}
 	},
 	"scripts": {
-		"build": "tsc -p .configs/tsconfig.base.json",
+		"build": "tsc -p .configs/tsconfig.build.json",
 		"typecheck": "tsc -p .configs/tsconfig.base.json",
 		"test": "vitest run --config .configs/vitest.config.mts",
 		"test:watch": "vitest --config .configs/vitest.config.mts",
-		"discover": "node --no-warnings --experimental-strip-types tools/discover.mts"
+		"discover": "node --no-warnings --experimental-strip-types tools/discover.mts",
+		"prepublishOnly": "npm run build"
 	},
 	"keywords": [
 		"kasa",
@@ -56,12 +60,12 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/CLDMV/kasa-api.git"
+		"url": "git+https://github.com/CLDMV/io-kasa-api.git"
 	},
 	"bugs": {
-		"url": "https://github.com/CLDMV/kasa-api/issues"
+		"url": "https://github.com/CLDMV/io-kasa-api/issues"
 	},
-	"homepage": "https://github.com/CLDMV/kasa-api#readme",
+	"homepage": "https://github.com/CLDMV/io-kasa-api#readme",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -75,7 +79,7 @@
 		"vitest": "^2.1.8"
 	},
 	"files": [
-		"src/",
+		"dist/",
 		"LICENSE",
 		"README.md"
 	],
