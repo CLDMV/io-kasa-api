@@ -354,6 +354,15 @@ node --experimental-strip-types tools/dumpall.mts "Lamp"          # every namesp
 npm run discover                                                  # raw discovery dump
 ```
 
+## Examples
+
+Runnable scenarios under [`examples/`](./examples/):
+
+- [`motion-trigger.mjs`](./examples/motion-trigger.mjs) — watch a motion sensor; switch another device on when motion fires, off after a stillness window.
+- [`linked-group.mjs`](./examples/linked-group.mjs) — gang N devices: any one going on/off propagates to the rest, with per-device echo suppression so feedback loops don't form.
+
+See [`examples/README.md`](./examples/README.md) for usage and the patterns they lean on.
+
 ## Development
 
 ```sh
