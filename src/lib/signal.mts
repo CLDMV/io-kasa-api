@@ -6,9 +6,19 @@
  * each to an RSSI entry. Non-responders appear with `reachable: false` so weak
  * or offline devices are visible.
  *
+ * `report` accepts a few input shapes:
+ *
+ *   - omitted — UDP discover on the local subnet
+ *   - a CIDR string (has `/`) — sweep that CIDR
+ *   - an IPv4 / MAC / alias string — single-device report
+ *   - a {@link SignalReportOptions} object — full control (`cidr`, `devices`,
+ *     `concurrency`, `timeoutMs`)
+ *
  * Imported by `index.mts` (the entry), not loaded by slothlet.
  */
+import { isIpv4 } from "./devices.mts";
 import type {
+	DeviceRef,
 	DeviceTarget,
 	DiscoveredDevice,
 	OpResult,
@@ -34,34 +44,47 @@ type AnyApi = {
 		discover(options?: Record<string, unknown>): Promise<DiscoveredDevice[]>;
 		sweep(cidr: string, options?: Record<string, unknown>): Promise<DiscoveredDevice[]>;
 	};
-	bulk: { device: { info: { get(targets: DeviceTarget[]): Promise<Array<OpResult<SysInfo>>> } } };
+	bulk: { device: { info: { get(refs: ReadonlyArray<DeviceRef>): Promise<Array<OpResult<SysInfo>>> } } };
 };
+
+/** Coerce the first arg of `report` to a {@link SignalReportOptions}. */
+function normalizeInput(input?: string | SignalReportOptions): SignalReportOptions {
+	if (input === undefined) return {};
+	if (typeof input !== "string") return input;
+	// A CIDR has a `/`; everything else is a single-device ref (IP/MAC/alias).
+	if (input.includes("/")) return { cidr: input };
+	return { devices: [input] };
+}
 
 /**
  * Build the `api.signal` surface from the live API object.
  *
- * @param api - The built API (needs `discovery` and `bulk.device.getSysInfo`).
+ * @param api - The built API (needs `discovery` and `bulk.device.info.get`).
  */
 export function buildSignal(api: AnyApi): SignalApi {
 	return {
-		async report(options: SignalReportOptions = {}): Promise<SignalEntry[]> {
+		async report(input?: string | SignalReportOptions): Promise<SignalEntry[]> {
+			const options = normalizeInput(input);
 			const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
 			const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
 			// Resolve the device list: explicit > CIDR sweep > local broadcast.
-			let targets: DeviceTarget[];
+			let refs: ReadonlyArray<DeviceRef>;
 			if (options.devices) {
-				targets = options.devices;
+				refs = options.devices;
 			} else if (options.cidr) {
 				const found = await api.discovery.sweep(options.cidr, { timeoutMs, concurrency });
-				targets = found.map((d) => ({ host: d.host }));
+				refs = found.map((d) => ({ host: d.host }));
 			} else {
 				const found = await api.discovery.discover({ timeoutMs });
-				targets = found.map((d) => ({ host: d.host }));
+				refs = found.map((d) => ({ host: d.host }));
 			}
 
-			// Bulk-read sysinfo (per-device timeout pinned).
-			const probed = targets.map((t) => ({ ...t, timeoutMs }));
+			// Bulk-read sysinfo (per-device timeout pinned). For object refs we
+			// can pin the timeout; for string refs the bulk wrapper resolves them.
+			const probed: DeviceRef[] = refs.map((r) =>
+				typeof r === "string" ? r : ({ ...r, timeoutMs } as DeviceTarget)
+			);
 			const results = await api.bulk.device.info.get(probed);
 
 			const entries: SignalEntry[] = results.map((r) => {
@@ -88,3 +111,6 @@ export function buildSignal(api: AnyApi): SignalApi {
 		}
 	};
 }
+
+// Re-export for symmetry — callers shouldn't need it, but signal-adjacent code might.
+export { isIpv4 };

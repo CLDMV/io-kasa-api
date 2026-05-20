@@ -30,12 +30,51 @@ const UNREACHABLE = /timeout|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|EH
 /** The underlying EventEmitter, for advanced use (raw `emit`, listener introspection). */
 export const emitter = bus;
 
-/** Bus-level defaults — currently just the global `confirm` (verified-write) toggle. */
-const defaults = { confirm: false };
+/**
+ * Bus-level defaults — global toggles overridden per-target and per-call.
+ *
+ *   - `confirm` — read-back verification for mutating writes.
+ *   - `force`   — bypass the resolver sweep cache for MAC/alias refs.
+ *
+ * `force` is consumed by the ref-resolution wrapper (`src/lib/refs.mts`) and
+ * by `bulk.mts`; `run()` itself doesn't read it. We keep both on one object
+ * so a single `events.configure({ ... })` call wires everything, and so the
+ * wrapper can hold a live reference to the snapshot (mutations land here).
+ */
+export const defaults = { confirm: false, force: false };
 
-/** Set bus-level defaults. Called by `createKasaApi` to wire the global `confirm`. */
-export function configure(options: { confirm?: boolean }): void {
+/** Set bus-level defaults. Called by `createKasaApi` to wire the globals. */
+export function configure(options: { confirm?: boolean; force?: boolean }): void {
 	if (typeof options.confirm === "boolean") defaults.confirm = options.confirm;
+	if (typeof options.force === "boolean") defaults.force = options.force;
+}
+
+/**
+ * Return the live bus-level defaults object. The same object is returned every
+ * call — the ref-resolution / bulk wrappers in `src/lib/` capture this
+ * reference once and observe mutations from later `configure()` calls.
+ */
+export function getDefaults(): { confirm: boolean; force: boolean } {
+	return defaults;
+}
+
+/**
+ * Low-level: emit a pre-built {@link OpEvent} across all three tiers (general
+ * `op` / `success` | `error`, path `<op>`, leaf action) on the **real** bus.
+ *
+ * Used by the ref-resolution wrapper in `src/lib/refs.mts` to surface the
+ * synthetic `ok: false` event for a MAC/alias ref that didn't resolve.
+ * `api.events.emitter` isn't suitable for this from outside the slothlet
+ * boundary — the field is proxy-wrapped — so we route through here instead.
+ */
+export function emitOp<T>(event: OpEvent<T>): void {
+	const op = event.op;
+	const action = op.slice(op.lastIndexOf(".") + 1);
+	bus.emit("op", event);
+	bus.emit(op, event);
+	if (action && action !== op) bus.emit(action, event);
+	const channel = event.ok ? "success" : "error";
+	if (channel !== "error" || bus.listenerCount("error") > 0) bus.emit(channel, event);
 }
 
 /**

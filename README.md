@@ -53,9 +53,10 @@ api.events.on("op", (e) => console.log(`${e.op} @ ${e.host} → ${e.ok ? "ok" : 
 api.events.on("error", (e) => console.warn(`${e.op} failed @ ${e.host}: ${e.error}`));
 
 // 2. Fire and forget — no await; the outcome lands on the bus.
-const lamp = await api.devices.resolve("Living Room Lamp");
-api.switch.on(lamp);
-api.dimmer.brightness.set(lamp, 60);
+// Every command accepts a DeviceRef — an IP, MAC, alias, or target object.
+api.switch.on("Living Room Lamp");                       // alias → cached sweep lookup
+api.dimmer.brightness.set("10.0.0.5", 60);               // IP → blind fire, no cache touch
+api.bulk.plug.on(["Pantry Light", "10.0.0.6", "Lamp"]);  // mixed-ref bulk
 ```
 
 ```js
@@ -77,8 +78,75 @@ Every device command resolves to an `OpResult`; it never rejects.
 | `target` / `host` | the device the op addressed |
 | `value` | parsed device response, when `ok` |
 | `error` | message, when `!ok` |
-| `reachable` | `false` when the failure was a connectivity error |
+| `reachable` | `false` when the failure was a connectivity error or an unresolved MAC/alias ref |
 | `durationMs` | wall-clock duration |
+
+### Targeting — `DeviceRef`
+
+Every command on `api.<module>.…` (and every slot in a `api.bulk.*` array)
+accepts a **`DeviceRef`** — one of four interchangeable forms:
+
+| Form | Example | Cache touched? | Notes |
+|---|---|---|---|
+| `DeviceTarget` object | `{ host: "10.0.0.5", port: 9999 }` | no — fire blind | The most explicit form. Pin `port`, `timeoutMs`, per-target `confirm` / `force` here. |
+| IPv4 string | `"10.0.0.5"` | no — fire blind | Synthesised to `{ host: ref }`. Uses defaults (port 9999, default timeout). |
+| MAC string | `"aa:bb:cc:dd:ee:ff"` | yes — sweep cache | Any separator (`:`, `-`, none) and any case. Looked up in the resolver's cache; sweeps once on a miss. |
+| Alias (name) string | `"Living Room Lamp"` | yes — sweep cache | Matched against `sysInfo.alias`, case- and whitespace-insensitive. |
+
+```js
+// All four forms work everywhere:
+api.switch.on({ host: "10.0.0.5", timeoutMs: 2000 });
+api.switch.on("10.0.0.5");
+api.switch.on("aa:bb:cc:dd:ee:ff");
+api.switch.on("Living Room Lamp");
+
+// Mixed in bulk:
+api.bulk.plug.on([
+  "10.0.0.5",
+  "aa:bb:cc:dd:ee:ff",
+  "Pantry Light",
+  { host: "10.0.0.6", port: 9999 }
+]);
+
+// signal.report takes the same shapes (plus CIDR):
+api.signal.report();                  // local broadcast
+api.signal.report("10.0.0.0/24");     // sweep that CIDR
+api.signal.report("10.0.0.5");        // single-device report
+api.signal.report({ devices: [...] }) // full control
+```
+
+**Unresolved MAC/alias** (the resolver can't find a match, even after a
+re-sweep) resolves to an `OpResult` with `ok: false`, `reachable: false`, and
+an `error` describing the miss — same shape as any other failed op. A
+listener on `"switch.on"` (or `error`, or `op`) sees the failure too.
+
+### Verified writes — `confirm` · Cache bypass — `force`
+
+Two flags travel on the same precedence chain — **per-call > target > global**:
+
+| Flag | Default | When `true` |
+|---|---|---|
+| `confirm` | `false` | After a mutating write returns `err_code: 0`, the API re-reads the value and resolves `ok: false` if it doesn't match. Paranoia mode for writes. |
+| `force` | `false` | For MAC/alias refs only: the resolver throws away the cache and re-sweeps before the lookup. Useful when DHCP renewed the IP under the same MAC/name. **No-op for `DeviceTarget` and IPv4 refs** — there's nothing to bypass. |
+
+Settable from three places:
+
+```js
+// 1. Global — every command on this API uses these defaults.
+const api = await createKasaApi({ confirm: true, force: true });
+
+// 2. Per-target — applies to every command for this target object.
+api.switch.on({ host: "10.0.0.5", confirm: true, force: true });
+
+// 3. Per-call — overrides target / global, either direction.
+api.switch.on("Lamp", { force: true });               // re-sweep first
+api.switch.on(target, { confirm: false });            // skip the read-back
+api.switch.on({ host, confirm: true }, { confirm: false }); // per-call wins
+```
+
+A few commands have no sensible `confirm` read-back (`device.reboot` — the
+device is gone) — they accept the option but ignore it and fall back to
+trusting `err_code: 0`.
 
 ### Events — the primary interface
 
@@ -177,33 +245,6 @@ on a miss; `resolveBroadcast` gives `null` when no usable interface exists.
 The emitted `OpEvent` has no `target` / `host` (those fields are optional for
 non-device operations).
 
-### Verified writes — `confirm`
-
-By default a mutating command resolves `ok: true` as soon as the device
-acks the write with `err_code: 0` (which is the device's own confirmation
-it applied the change). For extra paranoia, opt into a read-back: the API
-re-reads the value after the write and resolves `ok: false` if it doesn't
-match what you asked for.
-
-Settable from three places, precedence **per-call > target > global**:
-
-```js
-// 1. Global default — every write on this API verifies.
-const api = await createKasaApi({ confirm: true });
-
-// 2. Per-target — every command for this target verifies.
-api.switch.on({ host: "10.0.0.5", confirm: true });
-
-// 3. Per-call — overrides the target / global (either direction).
-api.switch.on(target, { confirm: true });
-api.switch.on({ host: "10.0.0.5", confirm: true }, { confirm: false });
-```
-
-A few commands have no sensible read-back (`device.reboot`,
-`dimmer.doubleClick.set` / `longPress.set`, `plug.children.set`,
-`energy.stats.erase`) — they accept the option but ignore it and fall back
-to trusting `err_code: 0`.
-
 ## API overview
 
 `createKasaApi(options?)` returns:
@@ -235,7 +276,8 @@ or `api.device.alias.get(target)`.
 | Option | Default | Purpose |
 |---|---|---|
 | `sweepCidr` | `KASA_SWEEP` env / `10.8.0.0/23` | CIDR the device resolver sweeps |
-| `confirm` | `false` | global default for verified writes (see [above](#verified-writes--confirm)) |
+| `confirm` | `false` | global default for verified writes — see [Targeting](#targeting--deviceref) |
+| `force` | `false` | global default for bypassing the resolver sweep cache on MAC/alias refs — see [Targeting](#targeting--deviceref) |
 | `mode` | `"eager"` | `"eager"` loads all modules up front; `"lazy"` defers |
 | `bulkConcurrency` | `32` | in-flight probe count for `api.bulk.*` |
 | `context` | `{}` | extra context propagated through slothlet |
@@ -243,11 +285,19 @@ or `api.device.alias.get(target)`.
 
 ## Bulk operations
 
-Every device command has a `bulk` twin that takes an array of targets:
+Every device command has a `bulk` twin that takes an array of refs — mix any
+shape of `DeviceRef` in a single call:
 
 ```js
-const results = await api.bulk.plug.on([{ host: "10.0.0.5" }, { host: "10.0.0.6" }]);
-// → one OpResult per device, in input order, non-responders included
+const results = await api.bulk.plug.on([
+  "10.0.0.5",                  // IP string → blind fire
+  "aa:bb:cc:dd:ee:ff",         // MAC → cache lookup
+  "Pantry Light",              // alias → cache lookup
+  { host: "10.0.0.6", port: 9999 }  // object target
+]);
+// → one OpResult per slot, in input order. Non-responders come back ok:false
+//   reachable:false; MAC/alias misses come back ok:false with an error.
+// Each slot also emits its own event under the command's path (`plug.on`).
 ```
 
 ## Monitoring
@@ -281,8 +331,13 @@ m.stop(); // watchers also emit `error` (a failed poll) and `stop`
 ## Signal report
 
 ```js
-const report = await api.signal.report({ cidr: "10.0.0.0/24" });
-// [{ host, alias, model, rssi, quality, reachable }, ...] sorted strongest→weakest
+await api.signal.report();                  // UDP broadcast on the local subnet
+await api.signal.report("10.0.0.0/24");     // sweep that CIDR
+await api.signal.report("10.0.0.5");        // single-device report (IP / MAC / alias)
+await api.signal.report({ cidr: "10.0.0.0/24", concurrency: 16, timeoutMs: 2000 });
+await api.signal.report({ devices: ["Living Room Lamp", "10.0.0.6"] });
+
+// → [{ host, alias, model, rssi, quality, reachable }, ...] sorted strongest→weakest
 ```
 
 ## CLI tools

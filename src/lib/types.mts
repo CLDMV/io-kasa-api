@@ -22,6 +22,16 @@ export interface DeviceTarget {
 	 * `createKasaApi({ confirm })`.
 	 */
 	confirm?: boolean;
+	/**
+	 * Force-bypass the device resolver's sweep cache when the ref is a MAC or
+	 * alias. When `true`, the resolver re-sweeps the network before looking up
+	 * the ref (useful when DHCP renewed the IP under the same MAC/name). For
+	 * `DeviceTarget` and IPv4-string refs this is a no-op — those are sent
+	 * straight to the wire without ever consulting the cache. Overridden by a
+	 * per-call {@link CommandOptions.force}; falls back to the global default
+	 * set on `createKasaApi({ force })`.
+	 */
+	force?: boolean;
 }
 
 /**
@@ -42,6 +52,12 @@ export interface CommandOptions {
 	 * the target's `confirm` and the global default. See {@link DeviceTarget.confirm}.
 	 */
 	confirm?: boolean;
+	/**
+	 * Force-bypass the device resolver's sweep cache when the ref is a MAC or
+	 * alias. See {@link DeviceTarget.force}. No-op for `DeviceTarget` / IPv4
+	 * refs. Overrides the target's `force` and the global default.
+	 */
+	force?: boolean;
 }
 
 /**
@@ -416,8 +432,8 @@ export interface SignalEntry {
 export interface SignalReportOptions {
 	/** Scan this CIDR via unicast sweep. */
 	cidr?: string;
-	/** Or report on this explicit device list. */
-	devices?: DeviceTarget[];
+	/** Or report on this explicit device list — accepts the same mixed-ref array as bulk. */
+	devices?: ReadonlyArray<DeviceRef>;
 	/** Probe concurrency. Default 32. */
 	concurrency?: number;
 	/** Per-device timeout in ms. Default 1500. */
@@ -500,10 +516,27 @@ export interface EventsApi {
 	/** Type guard for {@link Failure}. */
 	isFailure(value: unknown): value is Failure;
 	/**
-	 * Set bus-level defaults. `confirm` is the global default for verified
-	 * writes — overridden per-target and per-call. Called by `createKasaApi`.
+	 * Set bus-level defaults. Called by `createKasaApi`.
+	 *
+	 *   - `confirm` — global default for verified writes (per-call > target > global).
+	 *   - `force`   — global default for bypassing the resolver sweep cache for
+	 *                 MAC/alias refs (per-call > target > global).
 	 */
-	configure(options: { confirm?: boolean }): void;
+	configure(options: { confirm?: boolean; force?: boolean }): void;
+	/**
+	 * Read the live bus-level defaults object. The same object is returned on
+	 * every call — the ref-resolution / bulk wrappers hold the reference, so a
+	 * later `configure(...)` call is observed by every wrapper without rewiring.
+	 */
+	getDefaults(): { confirm: boolean; force: boolean };
+	/**
+	 * Low-level: emit a pre-built {@link OpEvent} across all three tiers (general
+	 * `op` / `success` | `error`, path `<op>`, leaf action). Used by the
+	 * ref-resolution wrapper to surface the synthetic `ok: false` event for an
+	 * unresolved MAC/alias ref — `api.events.emitter` is proxy-wrapped outside
+	 * the slothlet boundary and isn't suitable for direct `emit()` from `lib/`.
+	 */
+	emitOp<T = unknown>(event: OpEvent<T>): void;
 	/**
 	 * Run a unit of work as a tracked operation: executes `work`, captures
 	 * success/failure into an {@link OpResult} (never throws), emits events,
@@ -535,7 +568,21 @@ export interface EventsApi {
 	): Promise<T>;
 }
 
-/** Read-only resource leaf. */
+// Two views of the device-command surface live in this file:
+//
+//   - `*Api` interfaces (`PlugApi`, `SwitchApi`, …) describe the **internal**
+//     contract every slothlet-loaded module sees: each leaf takes a resolved
+//     `DeviceTarget`. The implementation files type their exports against these
+//     so `self.protocol.send(target, …)` stays well-typed.
+//   - `WithRefSupport<M>` widens that contract to its **public** form: every
+//     leaf accepts any {@link DeviceRef} (IP / MAC / alias string, or target).
+//     `index.mts` wraps each module in place with the ref-resolver from
+//     `src/lib/refs.mts`, so the runtime object matches the wider type.
+//
+// `KasaApi` (the `createKasaApi(...)` return type) wraps the device-command
+// modules in `WithRefSupport`; nothing else here exposes the narrow form.
+
+/** Read-only resource leaf. Internal — the wrapper widens `target` to `DeviceRef`. */
 export interface ResourceGet<T> {
 	get(target: DeviceTarget): Promise<OpResult<T>>;
 }
@@ -702,24 +749,49 @@ export interface MonitorApi {
 	 * Watch a device's relay for on/off transitions. Pass `{ motion: true }`
 	 * to also poll the PIR and emit `motion`/`clear`. Returns a
 	 * {@link DeviceMonitor} EventEmitter; call `.stop()` to end.
+	 *
+	 * On the public {@link KasaApi} surface this accepts any {@link DeviceRef}:
+	 * object / IPv4 refs start the watcher synchronously; MAC / alias refs
+	 * resolve in the background — on a miss the emitter fires `"error"` then
+	 * `"stop"` on the next tick.
 	 */
 	watch(target: DeviceTarget, options?: WatchOptions): DeviceMonitor;
 	/**
 	 * Watch only the PIR motion sensor — debounced `motion`/`clear` events,
-	 * no relay polling. For motion switches (KS200M, KS220M, ES20M).
+	 * no relay polling. For motion switches (KS200M, KS220M, ES20M). On the
+	 * public surface accepts any {@link DeviceRef}; see {@link MonitorApi.watch}.
 	 */
 	watchMotion(target: DeviceTarget, options?: WatchMotionOptions): DeviceMonitor;
 }
 
 /**
+ * Public-surface type transform: every leaf `(target: DeviceTarget, …) => R`
+ * widens to `(ref: DeviceRef, …) => R`. Nested resource objects recurse; other
+ * properties pass through unchanged.
+ *
+ * This is what `createKasaApi(...)` returns for each device-command module —
+ * `index.mts` mutates the modules in place with the ref-resolver wrapper so
+ * the runtime matches the wider type.
+ */
+export type WithRefSupport<M> = {
+	[K in keyof M]: M[K] extends (target: DeviceTarget, ...rest: infer R) => infer Ret
+		? (ref: DeviceRef, ...rest: R) => Ret
+		: M[K] extends object
+			? WithRefSupport<M[K]>
+			: M[K];
+};
+
+/**
  * Turn a single-device command tree into its bulk twin, recursively: every
  * leaf `(target, ...rest) => Promise<OpResult<V>>` becomes
- * `(targets[], ...rest) => Promise<OpResult<V>[]>`; nested resource objects
- * are mirrored in place.
+ * `(refs[], ...rest) => Promise<OpResult<V>[]>`; nested resource objects are
+ * mirrored in place. Each slot in `refs[]` may be a `DeviceTarget`, an IPv4
+ * string, a MAC, or an alias — the same mixed-array shape that
+ * {@link DevicesApi.resolve} accepts.
  */
 export type Bulkified<M> = {
 	[K in keyof M]: M[K] extends (target: DeviceTarget, ...rest: infer R) => Promise<OpResult<infer V>>
-		? (targets: DeviceTarget[], ...rest: R) => Promise<Array<OpResult<V>>>
+		? (refs: ReadonlyArray<DeviceRef>, ...rest: R) => Promise<Array<OpResult<V>>>
 		: M[K] extends object
 			? Bulkified<M[K]>
 			: M[K];
@@ -727,8 +799,9 @@ export type Bulkified<M> = {
 
 /**
  * Dynamic bulk layer — mirrors every device-command module. Each method takes
- * `targets[]` instead of one target, runs them with bounded concurrency, and
- * resolves to one {@link OpResult} per device (including non-responders).
+ * `refs[]` (mixed array of {@link DeviceRef}s) instead of one ref, runs them
+ * with bounded concurrency, and resolves to one {@link OpResult} per device
+ * (including non-responders and unresolved MAC/alias refs).
  */
 export interface BulkApi {
 	device: Bulkified<DeviceApi>;
@@ -743,8 +816,16 @@ export interface BulkApi {
 
 /** Network-health reporting. */
 export interface SignalApi {
-	/** Collect RSSI for a CIDR / device list / local broadcast, sorted best→worst. */
-	report(options?: SignalReportOptions): Promise<SignalEntry[]>;
+	/**
+	 * Collect RSSI for a CIDR / device list / local broadcast, sorted best→worst.
+	 *
+	 * The first argument may be:
+	 *   - omitted — discover via UDP broadcast on the local subnet
+	 *   - a CIDR string (e.g. `"10.0.0.0/24"`) — sweep that range
+	 *   - an IPv4 / MAC / alias string — report on that single device
+	 *   - a {@link SignalReportOptions} object — full control
+	 */
+	report(input?: string | SignalReportOptions): Promise<SignalEntry[]>;
 }
 
 /**
@@ -759,9 +840,13 @@ export interface DevicesApi {
 	 * Resolve a MAC / alias (name) / IP — or a {@link DeviceTarget} passthrough —
 	 * to a {@link DeviceTarget}. An IP resolves directly; a MAC or name is looked
 	 * up in the cached sweep. Resolves to `null` (never throws) when a MAC/name
-	 * isn't in the cache after a re-sweep; emits a `devices.resolve` event.
+	 * isn't in the cache after a re-sweep; emits a `devices.resolve` event for
+	 * actual lookups (passthrough / IP cases are silent).
+	 *
+	 * `options.force` bypasses the cache: the resolver re-sweeps first, then
+	 * looks up the ref. No-op for `DeviceTarget` / IPv4 refs.
 	 */
-	resolve(ref: DeviceRef): Promise<DeviceTarget | null>;
+	resolve(ref: DeviceRef, options?: { force?: boolean }): Promise<DeviceTarget | null>;
 	/** Look up the full {@link DiscoveredDevice} for a ref; `undefined` if not cached. */
 	find(ref: DeviceRef): Promise<DiscoveredDevice | undefined>;
 	/** Cached device list — sweeps once on first use, then serves the cache. */

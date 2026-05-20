@@ -8,7 +8,8 @@
  *
  * Every method goes through `api.events.runUntargeted` — they never throw, and
  * each emits a `devices.<method>` event on the bus (plus the catch-all tiers).
- * On a cache miss `find`/`resolve` re-sweep once before giving up.
+ * Passthrough / IP cases of `resolve` are silent (no event, no work). On a
+ * cache miss `find`/`resolve` re-sweep once before giving up.
  *
  * Imported by `index.mts` (the entry), not loaded by slothlet.
  */
@@ -36,15 +37,33 @@ function normMac(s: string): string {
 	return s.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
 }
 
-function isIpv4(s: string): boolean {
+/** A dotted-quad IPv4 string (every octet ≤ 255). */
+export function isIpv4(s: string): boolean {
 	const m = IPV4.exec(s);
 	return m !== null && m.slice(1).every((octet) => Number(octet) <= 255);
 }
 
 /** A 12-hex-digit string (any separators) — i.e. a MAC. */
-function isMac(s: string): boolean {
+export function isMac(s: string): boolean {
 	return normMac(s).length === 12;
 }
+
+/**
+ * Built {@link DevicesApi} plus internal handles the ref-resolution wrapper
+ * needs (sync passthrough/cache-lookup, no events).
+ */
+export type DevicesApiInternal = DevicesApi & {
+	/**
+	 * Sync passthrough/cache-lookup for the ref-resolution wrapper. Returns a
+	 * target without touching the network or emitting events:
+	 *
+	 *   - `DeviceTarget` → the same object (passthrough)
+	 *   - IPv4 string    → `{ host: ref }`
+	 *   - cached MAC/name → `{ host: cached.host }`
+	 *   - otherwise → `undefined` (caller must `await resolve(ref)` for the work)
+	 */
+	quickResolve(ref: DeviceRef): DeviceTarget | undefined;
+};
 
 /**
  * Build the `api.devices` resolver/cache from the live API object.
@@ -52,7 +71,7 @@ function isMac(s: string): boolean {
  * @param api - The built API (needs `discovery.sweep` and `events.runUntargeted`).
  * @param defaultCidr - CIDR swept when a scan is needed and none is specified.
  */
-export function buildDevices(api: AnyApi, defaultCidr: string = DEFAULT_CIDR): DevicesApi {
+export function buildDevices(api: AnyApi, defaultCidr: string = DEFAULT_CIDR): DevicesApiInternal {
 	let cache: DiscoveredDevice[] | null = null;
 	/** In-flight first sweep, so concurrent cold calls don't each scan. */
 	let inflight: Promise<DiscoveredDevice[]> | null = null;
@@ -93,6 +112,15 @@ export function buildDevices(api: AnyApi, defaultCidr: string = DEFAULT_CIDR): D
 		return lookup(await sweepInternal(lastScan), ref);
 	}
 
+	/** Sync passthrough/cache-lookup — see {@link DevicesApiInternal.quickResolve}. */
+	function quickResolve(ref: DeviceRef): DeviceTarget | undefined {
+		if (typeof ref !== "string") return ref;
+		if (isIpv4(ref)) return { host: ref };
+		if (cache === null) return undefined;
+		const hit = lookup(cache, ref);
+		return hit ? { host: hit.host } : undefined;
+	}
+
 	return {
 		list: (options: DevicesScanOptions = {}) =>
 			api.events.runUntargeted("devices.list", [options], () => listInternal(options), [] as DiscoveredDevice[]),
@@ -100,19 +128,26 @@ export function buildDevices(api: AnyApi, defaultCidr: string = DEFAULT_CIDR): D
 			api.events.runUntargeted("devices.refresh", [options], () => sweepInternal(options), [] as DiscoveredDevice[]),
 		find: (ref: DeviceRef) =>
 			api.events.runUntargeted<DiscoveredDevice | undefined>("devices.find", [ref], () => findInternal(ref), undefined),
-		resolve: (ref: DeviceRef) =>
-			api.events.runUntargeted<DeviceTarget | null>(
+		resolve: async (ref: DeviceRef, options?: { force?: boolean }) => {
+			// Passthrough — no event, no work.
+			if (typeof ref !== "string") return ref;
+			// Bare IP — no event, no work.
+			if (isIpv4(ref)) return { host: ref };
+			// MAC / alias — lookup against the cache (force re-sweeps first).
+			return api.events.runUntargeted<DeviceTarget | null>(
 				"devices.resolve",
-				[ref],
+				options?.force ? [ref, { force: true }] : [ref],
 				async () => {
-					// An explicit target passes straight through (keeps port / timeoutMs).
-					if (typeof ref !== "string") return ref;
-					// A bare IP needs no lookup.
-					if (isIpv4(ref)) return { host: ref };
+					if (options?.force) {
+						// Throw away the cache and re-scan before the lookup.
+						await sweepInternal(lastScan);
+					}
 					const device = await findInternal(ref);
 					return device ? { host: device.host } : null;
 				},
 				null
-			)
+			);
+		},
+		quickResolve
 	};
 }
