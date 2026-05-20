@@ -187,6 +187,11 @@ function matchesFilter(device: { host: string; sysInfo: Record<string, unknown> 
  * (`TP-LINK_Smart Plug_57A5` etc.) is meaningless, the outlets are the
  * usable units. Each child row's `IP` column carries the canonical
  * `<ip>/<index>` key form the `api.aliases.apply` JSON map accepts.
+ *
+ * Duplicate aliases (two or more rows sharing the same name) are annotated
+ * with `(dup N/M)` after the name so they're visible at a glance —
+ * `api.devices.resolve("Plug 1")` is first-match-wins on duplicates and the
+ * caller deserves to know there are multiple candidates.
  */
 function renderMinTable(devices: Array<{ host: string; sysInfo: Record<string, unknown> }>): string {
   type Row = { name: string; ip: string; model: string; mac: string };
@@ -213,8 +218,22 @@ function renderMinTable(devices: Array<{ host: string; sysInfo: Record<string, u
       });
     }
   }
-  // Alphabetise by name so the same network always prints the same order.
-  rows.sort((a, b) => a.name.localeCompare(b.name));
+  // Count alias frequency, then suffix duplicate names with `(dup N/M)` in
+  // the order they appear after sorting.
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.name, (counts.get(r.name) ?? 0) + 1);
+  // Alphabetise by name so the same network always prints the same order
+  // (and so duplicate rows sit next to each other in the output).
+  rows.sort((a, b) => a.name.localeCompare(b.name) || a.ip.localeCompare(b.ip));
+  const seen = new Map<string, number>();
+  for (const r of rows) {
+    const total = counts.get(r.name) ?? 1;
+    if (total > 1) {
+      const n = (seen.get(r.name) ?? 0) + 1;
+      seen.set(r.name, n);
+      r.name = `${r.name}  (dup ${n}/${total})`;
+    }
+  }
   const header: Row = { name: "Name", ip: "IP", model: "Model", mac: "MAC" };
   const widths = {
     name: Math.max(header.name.length, ...rows.map((r) => r.name.length)),

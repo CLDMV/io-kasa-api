@@ -45,16 +45,20 @@ export const alias: DeviceApi["alias"] = {
 			const r = await rawSysInfo(target);
 			return self.events.isFailure(r) ? r : r.alias;
 		}),
-	set: (target, value, options) =>
-		self.events.run(
+	set: (target, value, options) => {
+		// Precedence: per-call options.child > target.child. The target's child
+		// is set by the ref-resolution layer for refs like "10.8.1.50/0" or a
+		// child alias; per-call options.child overrides it when both are given.
+		const effectiveChild = options?.child ?? target.child;
+		return self.events.run(
 			"device.alias.set",
 			target,
-			options?.child ? [value, { child: options.child }] : [value],
+			effectiveChild ? [value, { child: effectiveChild }] : [value],
 			async () => {
 				// Child rename — wrap the command in a context.child_ids block so
 				// the device routes the rename to that outlet (HS300 / KP200).
 				const command: Record<string, Record<string, unknown>> = { system: { set_dev_alias: { alias: value } } };
-				if (options?.child) command.context = { child_ids: [options.child] };
+				if (effectiveChild) command.context = { child_ids: [effectiveChild] };
 				const response = await self.protocol.send(target, command);
 				return unwrap(response, "system", "set_dev_alias");
 			},
@@ -63,14 +67,15 @@ export const alias: DeviceApi["alias"] = {
 				verify: async () => {
 					const r = await rawSysInfo(target);
 					if (self.events.isFailure(r)) return false;
-					if (options?.child) {
+					if (effectiveChild) {
 						const kids = r.children ?? [];
-						return kids.find((c) => c.id === options.child)?.alias === value;
+						return kids.find((c) => c.id === effectiveChild)?.alias === value;
 					}
 					return r.alias === value;
 				}
 			}
-		)
+		);
+	}
 };
 
 /** Status LED. `get`/`set` are in terms of LED-on; the device stores the inverse (`led_off`). */

@@ -15,6 +15,22 @@ export interface DeviceTarget {
 	/** Transport timeout in milliseconds. */
 	timeoutMs?: number;
 	/**
+	 * Target a specific **child outlet** on a multi-outlet device (HS300 / KP200).
+	 * When set, relay-controlling commands (`plug.on/off/toggle/power`,
+	 * `switch.on/off/toggle/power`) wrap the protocol in
+	 * `context: { child_ids: [<this>] }` so the device routes the command to
+	 * that outlet, and verify reads `sysinfo.children[].state` for that ID.
+	 *
+	 * `alias.set` already takes a per-call `options.child`; when both are set
+	 * the per-call option wins. Other commands (`info`, `reboot`, `led`,
+	 * `dimmer.*`, `bulb.*`, `motion.*`) ignore this field — they're inherently
+	 * parent-level.
+	 *
+	 * Set by the ref-resolution layer when a ref like `"10.8.1.50/0"` or a
+	 * child alias is passed; you can also pass it directly on a target object.
+	 */
+	child?: string;
+	/**
 	 * Verify writes against the device by reading the value back after the set.
 	 * When `true`, a mutating command resolves `ok: false` if the read-back
 	 * doesn't match the requested value. Overridden by a per-call

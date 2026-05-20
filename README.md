@@ -84,14 +84,17 @@ Every device command resolves to an `OpResult`; it never rejects.
 ### Targeting — `DeviceRef`
 
 Every command on `api.<module>.…` (and every slot in a `api.bulk.*` array)
-accepts a **`DeviceRef`** — one of four interchangeable forms:
+accepts a **`DeviceRef`** — one of these interchangeable forms:
 
 | Form | Example | Cache touched? | Notes |
 |---|---|---|---|
-| `DeviceTarget` object | `{ host: "10.0.0.5", port: 9999 }` | no — fire blind | The most explicit form. Pin `port`, `timeoutMs`, per-target `confirm` / `force` here. |
+| `DeviceTarget` object | `{ host: "10.0.0.5", port: 9999 }` | no — fire blind | The most explicit form. Pin `port`, `timeoutMs`, per-target `confirm` / `force` / `child` here. |
 | IPv4 string | `"10.0.0.5"` | no — fire blind | Synthesised to `{ host: ref }`. Uses defaults (port 9999, default timeout). |
 | MAC string | `"aa:bb:cc:dd:ee:ff"` | yes — sweep cache | Any separator (`:`, `-`, none) and any case. Looked up in the resolver's cache; sweeps once on a miss. |
-| Alias (name) string | `"Living Room Lamp"` | yes — sweep cache | Matched against `sysInfo.alias`, case- and whitespace-insensitive. |
+| Device alias string | `"Living Room Lamp"` | yes — sweep cache | Matched against `sysInfo.alias`, case- and whitespace-insensitive. |
+| **Child of a strip** — `host/<index>` | `"10.0.0.5/0"` | yes — sweep cache | Outlet 0 of the strip at 10.0.0.5. Resolves to `{ host, child: <id> }`. |
+| **Child of a strip** — `host/<childId>` | `"10.0.0.5/8006…F00"` | yes — sweep cache | Same, addressing the outlet by its full hex child ID. |
+| **Child alias string** | `"Cario Cabinet"` | yes — sweep cache | Walks every device's `sysInfo.children[].alias`; resolves to the parent + that child. Duplicates: first match wins, a `devices.resolve` warning event fires. |
 
 ```js
 // All four forms work everywhere:
@@ -295,12 +298,34 @@ const results = await api.bulk.plug.on([
   "10.0.0.5",                  // IP string → blind fire
   "aa:bb:cc:dd:ee:ff",         // MAC → cache lookup
   "Pantry Light",              // alias → cache lookup
+  "10.8.1.50/0",               // strip child by index → cache lookup
+  "Cario Cabinet",             // strip child by alias → cache lookup
   { host: "10.0.0.6", port: 9999 }  // object target
 ]);
 // → one OpResult per slot, in input order. Non-responders come back ok:false
 //   reachable:false; MAC/alias misses come back ok:false with an error.
 // Each slot also emits its own event under the command's path (`plug.on`).
 ```
+
+### Multi-outlet plugs (HS300 / KP200) — relay control
+
+A multi-outlet strip has children — each outlet is its own logical device. Three ways to address one for `on` / `off` / `toggle` / `power`:
+
+```js
+// 1. Ref form — most ergonomic; the resolver populates target.child for you.
+await api.plug.on("10.8.1.50/0");      // outlet 0 of the strip at 10.8.1.50
+await api.plug.on("Cario Cabinet");    // outlet matched by its alias
+
+// 2. Object target with `child` — when you already know the IDs.
+await api.plug.on({ host: "10.8.1.50", child: "8006…F00" });
+
+// 3. Explicit `api.plug.children.set` — bulk multiple outlets in one call.
+await api.plug.children.set({ host: "10.8.1.50" }, ["8006…F00", "8006…F01"], true);
+```
+
+**What about a "naked" strip target?** `api.plug.on({ host: "10.8.1.50" })` with no `child` does a pre-read of `get_sysinfo` to detect children: if it's a strip, the call **broadcasts to every outlet** in one command (and verify checks every outlet's state). If it's a single-outlet plug, the call is the same bare `set_relay_state` it's always been. `toggle` follows the same broadcast rule — `any-on → all-off`, otherwise `all-on → all-off`.
+
+`api.switch.*` mirrors this for symmetry (multi-outlet wall switches aren't shipping today, but the contract stays consistent).
 
 ## Monitoring
 

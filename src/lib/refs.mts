@@ -93,8 +93,10 @@ export async function refToTarget(
 	// Object ref: passthrough — no cache touch, no resolve call. `force` is moot.
 	if (typeof ref !== "string") return ref;
 	// IPv4 string: synthesised target — same passthrough rationale as the object case.
+	// `host/<n>` strings DO need a lookup though (to translate the index into the
+	// child ID), so check for `/` before short-circuiting.
 	if (isIpv4(ref)) return { host: ref };
-	// MAC / alias: cache fast-path unless forced to re-sweep.
+	// MAC / alias / `host/<n>`: cache fast-path unless forced to re-sweep.
 	if (!force) {
 		const quick = devices.quickResolve(ref);
 		if (quick) return quick;

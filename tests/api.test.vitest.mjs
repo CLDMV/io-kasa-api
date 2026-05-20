@@ -159,11 +159,17 @@ describe("device resources", () => {
 });
 
 describe("plug resources", () => {
+  /** Find the first command the server received matching `predicate`. */
+  const findReceived = (server, predicate) => server.received.find((c) => predicate(c));
+
   it("on() sends set_relay_state:1", async () => {
+    // plug.on now pre-reads sysinfo to detect strips, so received[0] is a
+    // get_sysinfo and the set_relay_state lands later in the list.
     const server = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
     try {
       await api.plug.on({ host: "127.0.0.1", port: server.port });
-      expect(server.received[0]).toEqual({ system: { set_relay_state: { state: 1 } } });
+      const relayCmd = findReceived(server, (c) => Boolean(c.system?.set_relay_state));
+      expect(relayCmd).toEqual({ system: { set_relay_state: { state: 1 } } });
     } finally {
       await server.close();
     }
@@ -174,7 +180,8 @@ describe("plug resources", () => {
     try {
       const r = await api.plug.power.set({ host: "127.0.0.1", port: server.port }, false);
       expect(r.op).toBe("plug.off"); // router → the real op is plug.off
-      expect(server.received[0]).toEqual({ system: { set_relay_state: { state: 0 } } });
+      const relayCmd = findReceived(server, (c) => Boolean(c.system?.set_relay_state));
+      expect(relayCmd).toEqual({ system: { set_relay_state: { state: 0 } } });
     } finally {
       await server.close();
     }
@@ -505,10 +512,13 @@ describe("energy resources", () => {
 
 describe("switch resources", () => {
   it("on() sends set_relay_state:1", async () => {
+    // switch.on now pre-reads sysinfo to detect strips (same as plug.on), so
+    // received[0] is a get_sysinfo and the set_relay_state lands later.
     const server = await startFakeTcp(() => ({ system: { set_relay_state: { err_code: 0 } } }));
     try {
       await api.switch.on({ host: "127.0.0.1", port: server.port });
-      expect(server.received[0]).toEqual({ system: { set_relay_state: { state: 1 } } });
+      const relayCmd = server.received.find((c) => c.system?.set_relay_state);
+      expect(relayCmd).toEqual({ system: { set_relay_state: { state: 1 } } });
     } finally {
       await server.close();
     }
