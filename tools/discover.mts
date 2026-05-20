@@ -401,7 +401,7 @@ if (cli.probe) {
     const cloudTail =
       "If the Kasa app still sees it, the device is likely reaching TP-Link's cloud — local LAN isn't required for app visibility.";
     const sleepTail =
-      "Most common fix on newer Matter-enabled SKUs (ES20M, KP/KS variants, etc.): open the device in the Kasa app and toggle \"Third Party Compatibility\" ON — that gates the legacy XOR listener on port 9999. With it off, the device speaks only Matter on the LAN. Other causes: a Wi-Fi blip or post-reboot grace period; re-probe a few seconds after the next Kasa-app interaction.";
+      "Most common fix on newer Matter-enabled SKUs (ES20M, KP/KS variants, etc.): in the Kasa app turn ON \"Third Party Compatibility\". Currently lives in the app's global Settings (Me / hamburger menu → Settings); if it isn't there in your app version, check the per-device settings page too. It gates the legacy XOR listener on port 9999. Other causes: a Wi-Fi blip or post-reboot grace period — re-probe a few seconds after the next Kasa-app interaction.";
     if (isShip) {
       return `Matter commissioning (Server: "${httpServer}") exposed on port 80, no legacy Kasa port answering right now. Many devices expose both Matter and the legacy XOR protocol — ${sleepTail} If it really is Matter-only on the LAN: ${cloudTail}`;
     }
