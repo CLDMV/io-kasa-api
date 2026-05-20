@@ -37,6 +37,12 @@ interface CliArgs {
   filter?: string;
   /** Print a compact `Name | IP | Model | MAC` table instead of full JSON. */
   min?: boolean;
+  /**
+   * Diagnostic mode: probe an IP across the protocol ports this driver knows
+   * about and identify what (if anything) is listening. Used to figure out
+   * why a device the Kasa app sees doesn't show up in a sweep.
+   */
+  probe?: string;
   help?: boolean;
 }
 
@@ -46,6 +52,12 @@ Modes:
   (default)        UDP broadcast — local subnet only.
   --sweep CIDR     Unicast TCP scan of CIDR (e.g. 10.8.1.0/24). Works across
                    subnets/VLANs; use this when devices are on another network.
+  --probe IP       Diagnostic: probe one IP across the ports this driver
+                   knows about (9999 legacy TCP+UDP / 20002 KLAP / 50443 Tapo
+                   / 443 HTTPS / 80 HTTP) and report what's listening. Use
+                   when a device shows in the Kasa app but doesn't show in
+                   --sweep. HTTP servers are HTTP-GET'd to expose their
+                   Server header (helps identify Matter / firmware vintage).
 
 Broadcast options:
   baseIp           Any IPv4 on the target subnet (positional). Picks the
@@ -126,6 +138,10 @@ function parseArgs(argv: string[]): CliArgs {
     }
     if (a === "--min") {
       args.min = true;
+      continue;
+    }
+    if (a === "--probe") {
+      args.probe = value();
       continue;
     }
     // Bare positional (only one accepted) becomes baseIp.
@@ -263,6 +279,182 @@ const port = cli.port ?? Number(process.env.KASA_PORT ?? "9999");
 const concurrency = cli.concurrency ?? (process.env.KASA_CONCURRENCY ? Number(process.env.KASA_CONCURRENCY) : undefined);
 const maxDevices = cli.maxDevices ?? (process.env.KASA_MAX_DEVICES ? Number(process.env.KASA_MAX_DEVICES) : undefined);
 const explicitTimeout = cli.timeoutMs ?? (process.env.KASA_TIMEOUT_MS ? Number(process.env.KASA_TIMEOUT_MS) : undefined);
+
+// --probe runs without creating an API instance — it's pure network diagnosis.
+if (cli.probe) {
+  const { createConnection } = await import("node:net");
+  const { createSocket } = await import("node:dgram");
+  const http = await import("node:http");
+
+  /**
+   * Ports the probe checks. The driver speaks **legacy XOR over TCP 9999** only;
+   * everything else is informational. None of an "open but not 9999" result
+   * means a device is unreachable from the Kasa app — Kasa devices commonly
+   * also talk to TP-Link's cloud, so even with no useful LAN port a device
+   * can still appear in the app via cloud.
+   */
+  const TCP_PORTS: Array<{ port: number; label: string; hint: string }> = [
+    { port: 9999, label: "Kasa legacy (XOR)", hint: "✓ this driver speaks this" },
+    { port: 20002, label: "KLAP (newer HS / KP)", hint: "✗ not implemented here" },
+    { port: 50443, label: "Tapo TLS", hint: "✗ not implemented here" },
+    { port: 443, label: "HTTPS", hint: "informational" },
+    { port: 80, label: "HTTP", hint: "informational — HTTP-GET'd for Server:" }
+  ];
+
+  const TIMEOUT_MS = explicitTimeout ?? 2000;
+
+  function probeTcp(host: string, port: number): Promise<{ status: "open" | "refused" | "timeout" | "error"; detail?: string; ms: number }> {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const socket = createConnection({ host, port });
+      let settled = false;
+      const done = (status: "open" | "refused" | "timeout" | "error", detail?: string): void => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        const result: { status: "open" | "refused" | "timeout" | "error"; ms: number; detail?: string } = { status, ms: Date.now() - t0 };
+        if (detail !== undefined) result.detail = detail;
+        resolve(result);
+      };
+      socket.setTimeout(TIMEOUT_MS, () => done("timeout"));
+      socket.on("connect", () => done("open"));
+      socket.on("error", (err: NodeJS.ErrnoException) => done(err.code === "ECONNREFUSED" ? "refused" : "error", err.code ?? err.message));
+    });
+  }
+
+  function probeHttp(host: string, port: number): Promise<{ server: string; status: number } | null> {
+    return new Promise((resolve) => {
+      const req = http.get({ host, port, path: "/", timeout: TIMEOUT_MS }, (res) => {
+        res.resume();
+        resolve({ server: String(res.headers.server ?? ""), status: res.statusCode ?? 0 });
+      });
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(null);
+      });
+      req.on("error", () => resolve(null));
+    });
+  }
+
+  /**
+   * UDP 9999 unicast probe — sends a Kasa-style `get_sysinfo` payload (the
+   * same one `discovery.discover` broadcasts). Some firmware drops broadcast
+   * but answers unicast; some drops both; some answers normally. A reply
+   * here means legacy LAN is alive even if TCP 9999 refused.
+   */
+  function probeUdpKasa(host: string): Promise<{ status: "reply" | "timeout" | "error"; detail?: string; ms: number }> {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const socket = createSocket("udp4");
+      // Build the same XOR-encrypted body discovery.mts uses.
+      const payload = JSON.stringify({ system: { get_sysinfo: {} } });
+      const buf = Buffer.alloc(payload.length);
+      let key = 0xab;
+      for (let i = 0; i < payload.length; i++) {
+        const c = key ^ (payload.charCodeAt(i) & 0xff);
+        buf[i] = c;
+        key = c;
+      }
+      const timer = setTimeout(() => {
+        socket.close();
+        resolve({ status: "timeout", ms: Date.now() - t0 });
+      }, TIMEOUT_MS);
+      socket.once("message", () => {
+        clearTimeout(timer);
+        socket.close();
+        resolve({ status: "reply", ms: Date.now() - t0 });
+      });
+      socket.once("error", (err: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        socket.close();
+        resolve({ status: "error", detail: err.code ?? err.message, ms: Date.now() - t0 });
+      });
+      socket.send(buf, 0, buf.length, 9999, host);
+    });
+  }
+
+  /**
+   * Classify based on the probe results. Deliberately tentative — a "SHIP 2.0"
+   * banner only proves Matter commissioning is exposed; it doesn't prove the
+   * device has no other LAN listener. Cloud is also always a possibility for
+   * Kasa-app visibility, which doesn't require any local port at all.
+   */
+  function classify(rows: Array<{ port: number; status: string; server?: string }>, udpReply: boolean): string {
+    const open = (p: number): boolean => rows.find((r) => r.port === p)?.status === "open";
+    const server = (p: number): string => rows.find((r) => r.port === p)?.server ?? "";
+    if (open(9999) || udpReply) {
+      return "Legacy Kasa LAN protocol present — this driver can talk to it via api.* ✓";
+    }
+    if (open(20002)) return "KLAP listener present (newer Kasa firmware). This driver doesn't implement KLAP yet.";
+    if (open(50443)) return "Tapo TLS listener present. This driver doesn't implement Tapo yet.";
+    const httpServer = server(80);
+    const tail =
+      "If the Kasa app still sees it, the device is likely reaching TP-Link's cloud — local LAN isn't required for app visibility.";
+    if (open(80) && /ship/i.test(httpServer)) {
+      return `Matter commissioning (Server: "${httpServer}") exposed on port 80 — this device supports Matter. That alone doesn't mean Matter is the *only* path; the legacy LAN protocol may have been disabled in firmware, or it may only respond to the Kasa app's specific auth handshake. ${tail}`;
+    }
+    if (open(80) || open(443)) {
+      return `HTTP/HTTPS listener present (Server: "${httpServer || server(443)}") but no known Kasa protocol port. ${tail}`;
+    }
+    return `No known TP-Link / Tapo / Matter port is open. ${tail} Or the IP doesn't host a TP-Link device at all.`;
+  }
+
+  console.error(`Probing ${cli.probe} (timeout=${TIMEOUT_MS}ms per port)...\n`);
+
+  const [tcpRows, udp] = await Promise.all([
+    Promise.all(
+      TCP_PORTS.map(async ({ port: p, label, hint }) => {
+        const tcp = await probeTcp(cli.probe as string, p);
+        const banner = tcp.status === "open" && (p === 80 || p === 443) ? await probeHttp(cli.probe as string, p) : null;
+        const row: { port: number; label: string; hint: string; status: string; detail?: string; server?: string; ms: number } = {
+          port: p,
+          label,
+          hint,
+          status: tcp.status,
+          ms: tcp.ms
+        };
+        if (tcp.detail !== undefined) row.detail = tcp.detail;
+        if (banner) row.server = banner.server;
+        return row;
+      })
+    ),
+    probeUdpKasa(cli.probe as string)
+  ]);
+
+  const rows = [
+    ...tcpRows,
+    {
+      port: 9999,
+      label: "Kasa legacy (UDP unicast)",
+      status: udp.status === "reply" ? "open" : udp.status,
+      detail: udp.detail,
+      server: "",
+      ms: udp.ms,
+      hint: udp.status === "reply" ? "✓ device answered get_sysinfo over UDP" : "no reply / not listening"
+    }
+  ];
+
+  const w = {
+    port: 6,
+    label: Math.max("Service".length, ...rows.map((r) => r.label.length)),
+    status: 8,
+    server: Math.max("Server".length, ...rows.map((r) => (r.server ?? "").length))
+  };
+  const pad = (s: string, n: number): string => s + " ".repeat(Math.max(0, n - s.length));
+  console.log(`${pad("Port", w.port)}  ${pad("Service", w.label)}  ${pad("Status", w.status)}  ${pad("Server", w.server)}  Hint`);
+  console.log(`${"-".repeat(w.port)}  ${"-".repeat(w.label)}  ${"-".repeat(w.status)}  ${"-".repeat(w.server)}  ----`);
+  for (const r of rows) {
+    const tag = r.status === "open" ? "★ OPEN  " : pad(r.status, w.status);
+    const banner = r.server ?? (r.status === "refused" ? "" : r.detail ?? "");
+    console.log(`${pad(String(r.port), w.port)}  ${pad(r.label, w.label)}  ${tag}  ${pad(banner, w.server)}  ${r.hint}`);
+  }
+
+  console.log(`\n→ ${classify(tcpRows, udp.status === "reply")}`);
+  console.log(
+    `\nNote: this probe checks the protocols this driver knows about. It does NOT prove the\ndevice is unreachable from the Kasa app — cloud-backed devices have no required local port.\nIf you suspect a different LAN protocol, capture traffic while the Kasa app issues a command.`
+  );
+  process.exit(0);
+}
 
 const api = await createKasaApi();
 const started = Date.now();

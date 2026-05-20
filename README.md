@@ -29,7 +29,8 @@ nested resource tree assembled at runtime from the modules under `src/api/`.
 - **Node.js ≥ 20.19**
 - Devices reachable on the LAN that speak the legacy TP-Link **port-9999**
   protocol — most `HS`, `KP`, `KL`, `KS`, and `ES` Kasa models. Newer
-  **KLAP-only** devices (port 20002) are out of scope.
+  **KLAP-only** (port 20002) and **Matter-only** (Matter commissioning via
+  port 80 "SHIP 2.0") devices are out of scope — see [Troubleshooting](#troubleshooting--devices-that-dont-show-up) for diagnosis.
 
 ## Install
 
@@ -511,6 +512,40 @@ Runnable scenarios under [`examples/`](./examples/):
 - [`watch-aliases.mjs`](./examples/watch-aliases.mjs) — continuous drift correction: re-reads the JSON each tick, renames any device that's been changed back to canonical.
 
 See [`examples/README.md`](./examples/README.md) for usage and the patterns they lean on.
+
+## Troubleshooting — devices that don't show up
+
+A device the Kasa app shows but `npm run discover` doesn't usually means one of:
+
+1. **Newer firmware that dropped the legacy LAN protocol.** TP-Link has migrated several SKU lines (parts of the HS, KP, KL series; many newer Matter-enabled devices) onto either **KLAP** (port 20002) or **Matter only** (Matter commissioning advertised over HTTP on port 80, `Server: SHIP 2.0`). Neither is implemented here.
+2. **Cloud-only LAN.** Some devices keep no useful local listener — they reach TP-Link's cloud, and the Kasa app talks to them via cloud. They'll appear in the app regardless of any LAN protocol.
+3. **Network reachability.** Firewall, VLAN, mDNS reflection, or a multi-NIC host that's binding broadcasts to the wrong interface. `--sweep <cidr>` (unicast TCP) bypasses broadcast issues; if that still doesn't find it, the next checks apply.
+
+Diagnose a specific IP with the built-in probe:
+
+```sh
+npm run discover -- --probe 10.8.1.119
+```
+
+It probes TCP 9999 (legacy XOR), UDP 9999 (legacy discovery), TCP 20002 (KLAP), TCP 50443 (Tapo TLS), and HTTP 80/443 (HTTP-GETting `/` to capture the `Server:` header). The classification line at the bottom tells you which bucket the device falls in:
+
+```
+Port    Service                    Status    Server    Hint
+------  -------------------------  --------  --------  ----
+9999    Kasa legacy (XOR)          refused             ✓ this driver speaks this
+20002   KLAP (newer HS / KP)       refused             ✗ not implemented here
+50443   Tapo TLS                   refused             ✗ not implemented here
+443     HTTPS                      refused             informational
+80      HTTP                       ★ OPEN    SHIP 2.0  informational
+9999    Kasa legacy (UDP unicast)  timeout             no reply / not listening
+
+→ Matter commissioning (Server: "SHIP 2.0") exposed on port 80 — this device
+  supports Matter. ...
+```
+
+A `Server: SHIP 2.0` banner on port 80 is the Matter Commissioning Protocol (CSA spec) — strong signal the device has moved to Matter. To control such devices use a Matter controller (Home Assistant's matter-server, Apple Home, Google Home, Alexa).
+
+Matter support could be added here (the spec is open; `matter.js` exists), but it's a different protocol stack — commissioning flow, NOC storage, CASE/PASE crypto — and a much larger build than the legacy XOR driver. It hasn't been done yet.
 
 ## Development
 
