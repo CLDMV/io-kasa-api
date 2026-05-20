@@ -301,6 +301,9 @@ export interface PirMotionEvent {
 	durationMs?: number;
 }
 
+/** Origin attribution for a watcher event (see {@link MonitorEvent.cause}). */
+export type MonitorEventCause = "self" | "external" | "unknown";
+
 /** A device state event emitted by a {@link DeviceMonitor}. */
 export interface MonitorEvent {
 	/** Device host that produced the event. */
@@ -320,6 +323,21 @@ export interface MonitorEvent {
 	 * motion trigger from a manual press on its own.
 	 */
 	triggeredBy: "motion" | "unknown";
+	/**
+	 * Origin attribution for the transition, best-effort:
+	 *
+	 *   - `"self"`     — a successful `on`/`off` (or `power.set`) command for
+	 *                    this host with the matching verb landed via this API
+	 *                    instance recently (within ~3× the poll interval).
+	 *   - `"external"` — no recent self-command matches; the transition was
+	 *                    caused by a physical press, another app, or scheduling.
+	 *   - `"unknown"`  — baseline `"state"` events and any non-transition poll.
+	 *
+	 * Use this to silence echoes of your own commands in ganging / linking
+	 * patterns: `if (e.cause === "self") return`. Note: only correlates with
+	 * commands issued through the same `KasaApi` instance.
+	 */
+	cause: MonitorEventCause;
 	/** `Date.now()` of the poll. */
 	at: number;
 	/** Full raw sysinfo from the poll. */
@@ -762,6 +780,78 @@ export interface MonitorApi {
 	 * public surface accepts any {@link DeviceRef}; see {@link MonitorApi.watch}.
 	 */
 	watchMotion(target: DeviceTarget, options?: WatchMotionOptions): DeviceMonitor;
+}
+
+/** Options for {@link LinkApi.link}. */
+export interface LinkOptions {
+	/** Poll interval per device, ms. Default 1000 (floor 250 — the watcher floor). */
+	pollMs?: number;
+	/**
+	 * What to do when any device in the group transitions ON.
+	 *   - `"all-on"` (default) — switch the rest on.
+	 *   - `"none"`             — emit `"on"` but don't propagate.
+	 */
+	onAny?: "all-on" | "none";
+	/**
+	 * What to do when any device in the group transitions OFF.
+	 *   - `"all-off"` (default) — switch the rest off.
+	 *   - `"all-on"`            — leave others on (one going off doesn't gang).
+	 *   - `"none"`              — emit `"off"` but don't propagate.
+	 */
+	offAny?: "all-off" | "all-on" | "none";
+}
+
+/**
+ * A {@link LinkApi.link} report — emitted on the returned {@link LinkedGroup}
+ * each time one device's transition propagates to the others.
+ */
+export interface LinkPropagation {
+	/** The ref whose transition triggered the propagation. */
+	source: DeviceRef;
+	/** Which direction we propagated to the others. */
+	verb: "on" | "off";
+	/** Refs the bulk command targeted. */
+	targets: DeviceRef[];
+	/** One {@link OpResult} per target, in input order. */
+	results: OpResult[];
+	/** `Date.now()` when the propagation completed. */
+	at: number;
+}
+
+/**
+ * A linked group built by {@link LinkApi.link}. Wraps N watchers + the
+ * propagation pipeline behind one `stop()` and a small event surface.
+ */
+export interface LinkedGroup extends EventEmitter {
+	/** Refs the group is built from, in input order. */
+	readonly refs: ReadonlyArray<DeviceRef>;
+	/** Stop every watcher. Emits `"stop"`. Idempotent. */
+	stop(): void;
+	/** Emitter API — `propagate` per successful link action, `error` on poll failure, `stop` once at end. */
+	on(event: "propagate", listener: (payload: LinkPropagation) => void): this;
+	on(event: "error", listener: (err: Error) => void): this;
+	on(event: "stop", listener: () => void): this;
+}
+
+/**
+ * Device-linking helper — gang N devices so a transition on any one of them
+ * propagates to the rest. Built on top of `api.monitor.watch` + `api.bulk.switch`,
+ * uses {@link MonitorEvent.cause} to drop self-induced echoes without a
+ * time-window race.
+ */
+export interface LinkApi {
+	/**
+	 * Link a set of devices into a group. Returns a {@link LinkedGroup}.
+	 *
+	 * Defaults: any device turning on → all on; any device turning off → all
+	 * off; poll every 1000 ms per device.
+	 *
+	 * @example
+	 * const group = api.link(["Kitchen", "Hallway", "Living Room"]);
+	 * group.on("propagate", (e) => console.log(`${e.source} → ${e.verb}`));
+	 * process.on("SIGINT", () => group.stop());
+	 */
+	link(refs: ReadonlyArray<DeviceRef>, options?: LinkOptions): LinkedGroup;
 }
 
 /**

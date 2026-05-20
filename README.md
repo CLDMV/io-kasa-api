@@ -264,8 +264,9 @@ api
 ├── protocol   send() · sendUdp() · encrypt*/decrypt*
 ├── events     on/once/off · emitter · run()
 ├── devices    resolve() · find() · list() · refresh()
-├── bulk       every device module above, but over a targets[] array
-└── signal     report()
+├── bulk       every device module above, but over a refs[] array
+├── signal     report()
+└── link()     gang N devices — any one transition propagates to the rest
 ```
 
 Resource leaves expose `get` / `set`, e.g. `api.dimmer.brightness.set(target, 60)`
@@ -327,6 +328,58 @@ m.on("clear", (e) => console.log(`still after ${e.durationMs}ms of motion`));
 
 m.stop(); // watchers also emit `error` (a failed poll) and `stop`
 ```
+
+#### `MonitorEvent.cause` — self-vs-external attribution
+
+Every relay transition event (`on` / `off` / `change`) carries a `cause` field:
+
+| Value | Meaning |
+|---|---|
+| `"self"` | A successful `on` / `off` / `toggle` command for this host with the matching verb landed via this API instance within the last ~3× the poll interval. The transition is almost certainly the echo of your own command. |
+| `"external"` | No recent self-command matches. A physical press, another app, or scheduling caused it. |
+| `"unknown"` | Baseline `"state"` events (we don't know what put the relay in this state when we started watching). |
+
+Use it to silence echoes of your own commands without writing time-window
+hacks. The classic case is ganging — see [`api.link()`](#linking-with-apilink).
+
+```js
+const w = api.monitor.watch("Lamp");
+w.on("on", (e) => {
+  if (e.cause === "self") return;     // ignore my own commands
+  console.log("Someone else turned it on!");
+});
+```
+
+Caveat: only correlates with commands issued through the same `KasaApi`
+instance. A second process flipping the relay reads as `"external"`.
+
+### Linking with `api.link()`
+
+`api.link(refs, opts?)` gangs N devices: a transition on any one of them
+propagates to the rest. Built on `api.monitor.watch` + `api.bulk.switch`,
+using `MonitorEvent.cause === "self"` to drop the polled echo of its own
+bulk command — so a fresh user toggle right after a propagation is still
+handled correctly (no time-window race).
+
+```js
+const group = api.link(["Kitchen", "Hallway", "Living Room", "Bedroom"], {
+  pollMs: 1000,    // per-device poll cadence
+  onAny: "all-on", // default — any device on → all on
+  offAny: "all-off" // default — any device off → all off
+});
+
+group.on("propagate", (e) => {
+  console.log(`${e.source} → ${e.verb} → ${e.targets.join(", ")}`);
+});
+group.on("error", (err) => console.warn(err.message));
+
+// Later:
+group.stop(); // halts every watcher; emits "stop"
+```
+
+A worked example is in [`examples/linked-group.mjs`](./examples/linked-group.mjs).
+A motion-trigger example using `api.monitor.watchMotion` + `api.switch.on`
+is in [`examples/motion-trigger.mjs`](./examples/motion-trigger.mjs).
 
 ## Signal report
 

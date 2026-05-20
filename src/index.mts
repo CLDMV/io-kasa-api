@@ -38,9 +38,11 @@ import { buildBulk } from "./lib/bulk.mts";
 import { buildSignal } from "./lib/signal.mts";
 import { buildDevices } from "./lib/devices.mts";
 import { attachRefResolution, wrapMonitor } from "./lib/refs.mts";
+import { buildLink } from "./lib/link.mts";
 import type {
   BulkApi,
   DevicesApi,
+  LinkApi,
   SelfApi,
   SignalApi,
   WithRefSupport,
@@ -113,6 +115,8 @@ export type KasaApi = Omit<SelfApi, "device" | "plug" | "switch" | "dimmer" | "m
   signal: SignalApi;
   /** Device discovery cache + MAC/name/IP resolver. */
   devices: DevicesApi;
+  /** Device-linking helper — gang N devices so one transition propagates to all. */
+  link: LinkApi["link"];
   slothlet: {
     shutdown?: () => Promise<void>;
     [key: string]: unknown;
@@ -167,6 +171,9 @@ export async function createKasaApi(options: CreateKasaApiOptions = {}): Promise
   attachRefResolution(api as unknown as Record<string, unknown>, { devices, events: api.events, defaults });
   if (api.monitor) wrapMonitor(api.monitor as unknown as Parameters<typeof wrapMonitor>[0], { devices, events: api.events, defaults });
   api.signal = buildSignal(api as unknown as Parameters<typeof buildSignal>[0]);
+  // link builds on the ref-supporting api.monitor + api.bulk, so it must come
+  // after attachRefResolution / wrapMonitor / buildBulk.
+  api.link = buildLink(api as unknown as Parameters<typeof buildLink>[0]).link;
 
   return api;
 }
@@ -195,8 +202,13 @@ export type {
   WatchOptions,
   WatchMotionOptions,
   MonitorEvent,
+  MonitorEventCause,
   PirMotionEvent,
   DeviceMonitor,
+  LinkApi,
+  LinkOptions,
+  LinkPropagation,
+  LinkedGroup,
   SignalEntry,
   SignalReportOptions,
   Bulkified,

@@ -33,6 +33,10 @@ interface CliArgs {
   timeoutMs?: number;
   maxDevices?: number;
   concurrency?: number;
+  /** Substring filter against alias / IP / MAC (case-insensitive). */
+  filter?: string;
+  /** Print a compact `Name | IP | Model | MAC` table instead of full JSON. */
+  min?: boolean;
   help?: boolean;
 }
 
@@ -56,6 +60,11 @@ Shared options:
   --timeout MS     Broadcast: listen window (default 3000).
                    Sweep: per-host probe timeout (default 1000).
   --concurrency N  Sweep only: parallel probes. Default 64.
+  --filter TEXT    Keep only devices whose alias / IP / MAC contains TEXT
+                   (case-insensitive substring; MAC is matched hex-only,
+                   so "aabb" matches "aa:bb:..." or "aa-bb-...").
+  --min            Print a compact 'Name | IP | Model | MAC' table to stdout
+                   instead of the full DiscoveredDevice[] JSON.
   -h, --help       Show this help.
 
 Env vars (CLI args override env):
@@ -111,6 +120,14 @@ function parseArgs(argv: string[]): CliArgs {
       args.concurrency = Number(value());
       continue;
     }
+    if (a === "--filter") {
+      args.filter = value();
+      continue;
+    }
+    if (a === "--min") {
+      args.min = true;
+      continue;
+    }
     // Bare positional (only one accepted) becomes baseIp.
     if (!a.startsWith("-") && args.baseIp === undefined) {
       args.baseIp = a;
@@ -120,6 +137,48 @@ function parseArgs(argv: string[]): CliArgs {
     process.exit(2);
   }
   return args;
+}
+
+/** Hex-only lowercased MAC string — matches python-kasa's canonical form. */
+function normMac(s: string | undefined): string {
+  return (s ?? "").replace(/[^0-9a-fA-F]/g, "").toLowerCase();
+}
+
+/** Substring match against alias / IP / MAC (case-insensitive; MAC hex-only). */
+function matchesFilter(device: { host: string; sysInfo: Record<string, unknown> }, filter: string): boolean {
+  const needle = filter.toLowerCase();
+  const aliasHit = String(device.sysInfo.alias ?? "")
+    .toLowerCase()
+    .includes(needle);
+  if (aliasHit) return true;
+  if (device.host.toLowerCase().includes(needle)) return true;
+  // For MAC, compare the hex-only form so users don't have to know separators.
+  const macHex = normMac(String(device.sysInfo.mac ?? device.sysInfo.mic_mac ?? ""));
+  return macHex.includes(needle.replace(/[^0-9a-f]/g, ""));
+}
+
+/** Render a compact `Name | IP | Model | MAC` table (Markdown-style pipes). */
+function renderMinTable(devices: Array<{ host: string; sysInfo: Record<string, unknown> }>): string {
+  const rows = devices.map((d) => ({
+    name: String(d.sysInfo.alias ?? "(unnamed)"),
+    ip: d.host,
+    model: String(d.sysInfo.model ?? ""),
+    mac: String(d.sysInfo.mac ?? d.sysInfo.mic_mac ?? "")
+  }));
+  // Alphabetise by name so the same network always prints the same order.
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  const header = { name: "Name", ip: "IP", model: "Model", mac: "MAC" };
+  const widths = {
+    name: Math.max(header.name.length, ...rows.map((r) => r.name.length)),
+    ip: Math.max(header.ip.length, ...rows.map((r) => r.ip.length)),
+    model: Math.max(header.model.length, ...rows.map((r) => r.model.length)),
+    mac: Math.max(header.mac.length, ...rows.map((r) => r.mac.length))
+  };
+  const pad = (s: string, w: number): string => s + " ".repeat(Math.max(0, w - s.length));
+  const line = (r: typeof header): string =>
+    `${pad(r.name, widths.name)}  ${pad(r.ip, widths.ip)}  ${pad(r.model, widths.model)}  ${pad(r.mac, widths.mac)}`;
+  const ruler = `${"-".repeat(widths.name)}  ${"-".repeat(widths.ip)}  ${"-".repeat(widths.model)}  ${"-".repeat(widths.mac)}`;
+  return [line(header), ruler, ...rows.map(line)].join("\n");
 }
 
 const cli = parseArgs(process.argv.slice(2));
@@ -147,11 +206,13 @@ if (sweepCidr) {
   const sweepOpts: SweepOptions = { port, timeoutMs };
   if (concurrency !== undefined) sweepOpts.concurrency = concurrency;
   console.error(
-    `Sweeping ${sweepCidr} port=${port} timeoutMs=${timeoutMs} concurrency=${concurrency ?? 64}`
+    `Sweeping ${sweepCidr} port=${port} timeoutMs=${timeoutMs} concurrency=${concurrency ?? 64}` +
+      (cli.filter ? ` filter=${JSON.stringify(cli.filter)}` : "")
   );
-  const devices = await api.discovery.sweep(sweepCidr, sweepOpts);
+  let devices = await api.discovery.sweep(sweepCidr, sweepOpts);
+  if (cli.filter) devices = devices.filter((d) => matchesFilter(d, cli.filter as string));
   console.error(`Found ${devices.length} device(s) in ${Date.now() - started}ms.`);
-  console.log(JSON.stringify(devices, null, 2));
+  console.log(cli.min ? renderMinTable(devices) : JSON.stringify(devices, null, 2));
   process.exit(0);
 }
 
@@ -178,8 +239,9 @@ if (resolved) {
   );
 }
 
-const devices = await api.discovery.discover(opts);
+let devices = await api.discovery.discover(opts);
+if (cli.filter) devices = devices.filter((d) => matchesFilter(d, cli.filter as string));
 console.error(`Found ${devices.length} device(s) in ${Date.now() - started}ms.`);
-console.log(JSON.stringify(devices, null, 2));
+console.log(cli.min ? renderMinTable(devices) : JSON.stringify(devices, null, 2));
 
 process.exit(0);

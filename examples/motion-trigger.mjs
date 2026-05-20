@@ -15,20 +15,22 @@
  * Usage:
  *   node examples/motion-trigger.mjs [<sensor>] [<light>] [<offAfterMs>]
  *
- *   <sensor>       MAC / alias / IP of the motion device (default: "Hallway Motion")
- *   <light>        MAC / alias / IP of the device to switch (default: "Pantry Light")
+ *   <sensor>       MAC / alias / IP of the motion device (default: "Pantry Light"
+ *                  — the ES20M motion dimmer in the pantry)
+ *   <light>        MAC / alias / IP of the device to switch (default:
+ *                  "Dining Room Light" — what motion in the pantry should turn on)
  *   <offAfterMs>   Stillness window before the light turns off (default: 30000)
  *
  * Example:
- *   node examples/motion-trigger.mjs "Hallway Motion" "Pantry Light" 60000
+ *   node examples/motion-trigger.mjs "Pantry Light" "Dining Room Light" 60000
  *
  * In your own code, import from the package name instead of the relative path:
  *   import { createKasaApi } from "@cldmv/io-kasa-api";
  */
 import { createKasaApi } from "../src/index.mts";
 
-const SENSOR = process.argv[2] ?? "Hallway Motion";
-const LIGHT = process.argv[3] ?? "Pantry Light";
+const SENSOR = process.argv[2] ?? "Pantry Light";
+const LIGHT = process.argv[3] ?? "Dining Room Light";
 const OFF_AFTER_MS = Number(process.argv[4] ?? 30000);
 
 const api = await createKasaApi();

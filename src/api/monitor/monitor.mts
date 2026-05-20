@@ -23,6 +23,8 @@ import type {
 	DeviceMonitor,
 	DeviceTarget,
 	MonitorEvent,
+	MonitorEventCause,
+	OpEvent,
 	PirMotionEvent,
 	SelfApi,
 	WatchMotionOptions,
@@ -35,6 +37,82 @@ const DEFAULT_RELAY_INTERVAL_MS = 2000;
 const DEFAULT_MOTION_INTERVAL_MS = 400;
 const DEFAULT_MOTION_CLEAR_MS = 5000;
 const MIN_INTERVAL_MS = 250;
+
+// -----------------------------------------------------------------------------
+// Self-command tracking — origin attribution for MonitorEvent.cause.
+//
+// Subscribes to `success` events on the shared bus and records, per host, the
+// most recent on/off command this API instance issued. When a watcher tick
+// detects a transition, it checks the table: a match within `~3× pollInterval`
+// is "self"; otherwise "external". This is best-effort — same caveats as the
+// docs on MonitorEvent.cause:
+//   - only correlates with commands issued through *this* API instance
+//   - a coincident manual press lands as "self" if our command is recent
+//   - a failed command isn't tracked (so its echo, if any, reads as "external")
+// -----------------------------------------------------------------------------
+
+interface SelfCommandStamp {
+	verb: "on" | "off";
+	at: number;
+}
+
+/** Most-recent on/off command per host. Cleared on consume + aged on read. */
+const recentSelfCommands = new Map<string, SelfCommandStamp>();
+
+/** Map an op-path's leaf action to the corresponding watcher verb (or null to skip). */
+function leafActionToVerb(op: string, value: unknown): "on" | "off" | null {
+	const dot = op.lastIndexOf(".");
+	const action = dot < 0 ? op : op.slice(dot + 1);
+	if (action === "on") return "on";
+	if (action === "off") return "off";
+	// `power.set(true)` routes to `on` (and emits a `<mod>.on` success too) — so
+	// `set` events would double-count. Skip set entirely; we capture the routed
+	// on/off downstream.
+	if (action === "toggle") {
+		// `toggle` resolves with the new state as `value`. Use it for attribution.
+		if (value === 0) return "off";
+		if (value === 1) return "on";
+	}
+	return null;
+}
+
+/**
+ * Attach the success-bus listener once, lazily. Slothlet's `self` isn't live
+ * at top-level module evaluation, so we can't subscribe up there — we defer
+ * to the first call (the first `watch()` / `watchMotion()` creation).
+ */
+let successListenerAttached = false;
+function ensureSuccessListener(): void {
+	if (successListenerAttached) return;
+	successListenerAttached = true;
+	self.events.on("success", (event: OpEvent) => {
+		if (!event.host) return;
+		const verb = leafActionToVerb(event.op, event.value);
+		if (!verb) return;
+		recentSelfCommands.set(event.host, { verb, at: Date.now() });
+	});
+}
+
+/** Read the self-command stamp for a host; expires entries older than `maxAgeMs`. */
+function readSelfStamp(host: string, maxAgeMs: number): SelfCommandStamp | null {
+	const hit = recentSelfCommands.get(host);
+	if (!hit) return null;
+	if (Date.now() - hit.at > maxAgeMs) {
+		recentSelfCommands.delete(host);
+		return null;
+	}
+	return hit;
+}
+
+/** Return `"self"` and clear the stamp if a fresh matching command landed on `host`. */
+function consumeSelfCause(host: string, verb: "on" | "off", maxAgeMs: number): MonitorEventCause {
+	const stamp = readSelfStamp(host, maxAgeMs);
+	if (stamp && stamp.verb === verb) {
+		recentSelfCommands.delete(host);
+		return "self";
+	}
+	return "external";
+}
 
 /** Which pollers a monitor runs, and at what cadence. */
 interface MonitorConfig {
@@ -106,6 +184,10 @@ class KasaDeviceMonitor extends EventEmitter {
 					onTime: Number(sysInfo.on_time ?? 0),
 					activeMode: String(sysInfo.active_mode ?? ""),
 					triggeredBy: this.#motionRecently(at) ? "motion" : "unknown",
+					// Baseline + no-transition polls are always "unknown" — we don't know
+					// what made the relay be in its current state. Transitions get an
+					// actual self-vs-external attribution below.
+					cause: "unknown",
 					at,
 					sysInfo
 				};
@@ -113,6 +195,10 @@ class KasaDeviceMonitor extends EventEmitter {
 					this.emit("state", event);
 				} else if (relayState !== this.#lastRelay) {
 					event.changedTo = relayState;
+					// 3× the poll interval covers one "fire" cycle + one "catch" cycle
+					// plus slack for protocol round-trip jitter.
+					const maxAgeMs = this.#config.relayIntervalMs * 3;
+					event.cause = consumeSelfCause(this.#target.host, relayState === 1 ? "on" : "off", maxAgeMs);
 					this.emit("change", event);
 					this.emit(relayState === 1 ? "on" : "off", event);
 				}
@@ -184,6 +270,7 @@ class KasaDeviceMonitor extends EventEmitter {
  * w.on("motion", () => console.log("movement"));
  */
 export function watch(target: DeviceTarget, options: WatchOptions = {}): DeviceMonitor {
+	ensureSuccessListener();
 	const monitor = new KasaDeviceMonitor(target, {
 		relay: true,
 		motion: options.motion ?? false,
@@ -213,6 +300,7 @@ export function watch(target: DeviceTarget, options: WatchOptions = {}): DeviceM
  * w.on("clear", (ev) => console.log(`still for ${ev.durationMs}ms of motion`));
  */
 export function watchMotion(target: DeviceTarget, options: WatchMotionOptions = {}): DeviceMonitor {
+	ensureSuccessListener();
 	const monitor = new KasaDeviceMonitor(target, {
 		relay: false,
 		motion: true,
