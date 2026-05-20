@@ -6,6 +6,8 @@ Runnable end-to-end examples showing how to drive the API from real-world scenar
 |---|---|
 | [`motion-trigger.mjs`](./motion-trigger.mjs) | Watch a motion sensor; turn another device on when motion fires, off after a stillness window. |
 | [`linked-group.mjs`](./linked-group.mjs) | Link N devices together — any one going on or off propagates to the rest. Uses `api.link()`, the built-in helper, so the runnable logic is ~10 lines. |
+| [`rename-devices.mjs`](./rename-devices.mjs) | One-shot rename pass from a JSON map of desired aliases (keyed by IP or MAC). See [`aliases.example.json`](./aliases.example.json) for the format. |
+| [`watch-aliases.mjs`](./watch-aliases.mjs) | Continuous drift correction — re-reads the JSON file on every tick and renames any device that's been changed back to canonical. |
 
 ## Running
 

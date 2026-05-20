@@ -782,6 +782,146 @@ export interface MonitorApi {
 	watchMotion(target: DeviceTarget, options?: WatchMotionOptions): DeviceMonitor;
 }
 
+// -----------------------------------------------------------------------------
+// Alias management — desired-state device naming.
+// -----------------------------------------------------------------------------
+
+/**
+ * Desired-state alias map. Keys are device identifiers — either an IPv4
+ * string or a MAC string (any separator; case-insensitive). Values are the
+ * alias the device should carry.
+ *
+ * Whichever form you key by — IP or MAC — the helper finds the device on the
+ * network and renames it if the current alias differs. Devices on the network
+ * but not in the map are left alone; keys with no matching device are
+ * reported as `missing` rather than failing the whole apply.
+ *
+ * @example
+ * {
+ *   "10.8.1.35": "Staircase Light",
+ *   "aa:bb:cc:dd:ee:ff": "Living Room Lamp",
+ *   "AABBCCDDEEFF": "Kitchen Pendant"
+ * }
+ */
+export type AliasMap = Record<string, string>;
+
+/**
+ * A source from which an {@link AliasMap} can be loaded:
+ *   - a `string` — treated as a JSON file path (read each call / each tick).
+ *   - an `AliasMap` object — used directly (static).
+ *   - a function — invoked each call / tick (may return a Promise).
+ *
+ * For {@link AliasesApi.watch}, the file and function forms are re-evaluated
+ * every tick so you can edit the file (or have your function return fresh
+ * data) and the watcher picks it up without a restart.
+ */
+export type AliasSource = string | AliasMap | (() => AliasMap | Promise<AliasMap>);
+
+/** Options shared by {@link AliasesApi.apply} and {@link AliasesApi.watch}. */
+export interface ApplyOptions {
+	/**
+	 * Verify each rename by reading the alias back. Default `true` — alias
+	 * writes are cheap enough to confirm and a `false` rename should not
+	 * silently look like success.
+	 */
+	confirm?: boolean;
+	/**
+	 * Force-bypass the resolver sweep cache when looking up MAC/IP keys.
+	 * Default `false`. See {@link DeviceTarget.force}.
+	 */
+	force?: boolean;
+}
+
+/** One row of an {@link ApplyReport}.outcomes — what happened to one map entry. */
+export interface AliasOutcome {
+	/** The map key (IP or MAC) as written. */
+	key: string;
+	/** What the desired alias was. */
+	desired: string;
+	/** The device's current alias when we looked, if found. */
+	current?: string;
+	/** The host the key resolved to, if found. */
+	host?: string;
+	/**
+	 * What we did:
+	 *   - `"renamed"`   — alias differed; we wrote the new one.
+	 *   - `"unchanged"` — alias already matched the desired value.
+	 *   - `"missing"`   — no device on the network matched the key.
+	 *   - `"failed"`    — found the device but the rename returned ok:false.
+	 */
+	action: "renamed" | "unchanged" | "missing" | "failed";
+	/** Error message when `action === "failed"`. */
+	error?: string;
+}
+
+/** Aggregate report returned by {@link AliasesApi.apply}. */
+export interface ApplyReport {
+	/** `Date.now()` when the apply finished. */
+	at: number;
+	/** Per-entry results in input order. */
+	outcomes: AliasOutcome[];
+	/** Convenience counters derived from `outcomes`. */
+	counts: {
+		renamed: number;
+		unchanged: number;
+		missing: number;
+		failed: number;
+	};
+}
+
+/** Options for {@link AliasesApi.watch}. */
+export interface WatchAliasesOptions extends ApplyOptions {
+	/** How often to re-evaluate the source and check for drift. Default 30000 (30 s). */
+	intervalMs?: number;
+	/**
+	 * Run an apply immediately on `watch()` instead of waiting for the first
+	 * interval tick. Default `true`.
+	 */
+	runImmediately?: boolean;
+}
+
+/**
+ * Continuous alias watcher returned by {@link AliasesApi.watch}. An
+ * `EventEmitter` that re-asserts the desired aliases on every tick and emits:
+ *
+ *   - `"tick"`     — `ApplyReport` after each tick.
+ *   - `"renamed"`  — once per successful rename: `AliasOutcome`.
+ *   - `"missing"`  — once per tick if any keys had no matching device: `string[]`.
+ *   - `"error"`    — source-load or rename error: `Error`.
+ *   - `"stop"`     — once on shutdown.
+ */
+export interface AliasWatcher extends EventEmitter {
+	/** Stop the interval. Emits `"stop"`. Idempotent. */
+	stop(): void;
+	/** Force an immediate apply outside the interval. Resolves with the report. */
+	tick(): Promise<ApplyReport>;
+	/** Listener-typed `on` overloads for the documented events. */
+	on(event: "tick", listener: (report: ApplyReport) => void): this;
+	on(event: "renamed", listener: (outcome: AliasOutcome) => void): this;
+	on(event: "missing", listener: (keys: string[]) => void): this;
+	on(event: "error", listener: (err: Error) => void): this;
+	on(event: "stop", listener: () => void): this;
+}
+
+/**
+ * Alias-management helper. Reads a desired-state {@link AliasMap} from a JSON
+ * file, an object, or a function, and ensures the matching devices on the
+ * network carry the requested aliases.
+ */
+export interface AliasesApi {
+	/**
+	 * One-shot apply: read the source once, check each device, rename any
+	 * with a drifted alias. Returns an {@link ApplyReport}.
+	 */
+	apply(source: AliasSource, options?: ApplyOptions): Promise<ApplyReport>;
+	/**
+	 * Continuous monitor: re-evaluate the source every `intervalMs`, re-apply
+	 * drifts (so a device renamed by the Kasa app gets pulled back). Returns
+	 * an {@link AliasWatcher} EventEmitter; call `.stop()` to end.
+	 */
+	watch(source: AliasSource, options?: WatchAliasesOptions): AliasWatcher;
+}
+
 /** Options for {@link LinkApi.link}. */
 export interface LinkOptions {
 	/** Poll interval per device, ms. Default 1000 (floor 250 — the watcher floor). */

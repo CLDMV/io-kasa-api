@@ -266,7 +266,8 @@ api
 ├── devices    resolve() · find() · list() · refresh()
 ├── bulk       every device module above, but over a refs[] array
 ├── signal     report()
-└── link()     gang N devices — any one transition propagates to the rest
+├── link()     gang N devices — any one transition propagates to the rest
+└── aliases    apply() · watch() — desired-state device naming
 ```
 
 Resource leaves expose `get` / `set`, e.g. `api.dimmer.brightness.set(target, 60)`
@@ -381,6 +382,47 @@ A worked example is in [`examples/linked-group.mjs`](./examples/linked-group.mjs
 A motion-trigger example using `api.monitor.watchMotion` + `api.switch.on`
 is in [`examples/motion-trigger.mjs`](./examples/motion-trigger.mjs).
 
+### Desired-state aliases with `api.aliases`
+
+`api.aliases` keeps device names canonical from a map you control. The map is
+keyed by IPv4 or MAC; values are the alias each device should carry. Source
+can be a JSON file path, an object, or a function — all three forms are
+re-evaluated on every call (and every tick, in watch mode) so you can edit
+the file or have your function return fresh data and the watcher picks it
+up without restarting.
+
+```js
+// One-shot rename — read once, fix drift, report what happened.
+const report = await api.aliases.apply("/path/to/aliases.json", { confirm: true });
+console.log(report.counts);   // { renamed, unchanged, missing, failed }
+for (const o of report.outcomes) {
+  if (o.action === "renamed") console.log(`${o.host}: "${o.current}" → "${o.desired}"`);
+}
+
+// Continuous monitor — re-check every 30 s; pull any drift back to canonical.
+const watcher = api.aliases.watch("/path/to/aliases.json", { intervalMs: 30000 });
+watcher.on("renamed", (o) => console.log(`fixed ${o.key}: ${o.current} → ${o.desired}`));
+watcher.on("missing", (keys) => console.log(`no devices for: ${keys.join(", ")}`));
+process.on("SIGINT", () => watcher.stop());
+
+// Live-updating function source — return whatever the source of truth is now.
+const w = api.aliases.watch(async () => fetchAliasesFromCmdb(), { intervalMs: 60000 });
+```
+
+Source format:
+
+```json
+{
+  "10.8.1.35": "Staircase Light",
+  "aa:bb:cc:dd:ee:ff": "Living Room Lamp",
+  "AABBCCDDEEFF": "Kitchen Pendant — MAC keys are case- and separator-insensitive"
+}
+```
+
+Worked examples in [`examples/rename-devices.mjs`](./examples/rename-devices.mjs)
+(one-shot) and [`examples/watch-aliases.mjs`](./examples/watch-aliases.mjs)
+(interval). Starter mapping in [`examples/aliases.example.json`](./examples/aliases.example.json).
+
 ## Signal report
 
 ```js
@@ -413,6 +455,8 @@ Runnable scenarios under [`examples/`](./examples/):
 
 - [`motion-trigger.mjs`](./examples/motion-trigger.mjs) — watch a motion sensor; switch another device on when motion fires, off after a stillness window.
 - [`linked-group.mjs`](./examples/linked-group.mjs) — gang N devices: any one going on/off propagates to the rest, with per-device echo suppression so feedback loops don't form.
+- [`rename-devices.mjs`](./examples/rename-devices.mjs) — one-shot rename pass from a JSON map of desired aliases (keyed by IP or MAC).
+- [`watch-aliases.mjs`](./examples/watch-aliases.mjs) — continuous drift correction: re-reads the JSON each tick, renames any device that's been changed back to canonical.
 
 See [`examples/README.md`](./examples/README.md) for usage and the patterns they lean on.
 

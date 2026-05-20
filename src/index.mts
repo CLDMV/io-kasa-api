@@ -39,7 +39,9 @@ import { buildSignal } from "./lib/signal.mts";
 import { buildDevices } from "./lib/devices.mts";
 import { attachRefResolution, wrapMonitor } from "./lib/refs.mts";
 import { buildLink } from "./lib/link.mts";
+import { buildAliases } from "./lib/aliases.mts";
 import type {
+  AliasesApi,
   BulkApi,
   DevicesApi,
   LinkApi,
@@ -117,6 +119,8 @@ export type KasaApi = Omit<SelfApi, "device" | "plug" | "switch" | "dimmer" | "m
   devices: DevicesApi;
   /** Device-linking helper — gang N devices so one transition propagates to all. */
   link: LinkApi["link"];
+  /** Alias-management helper — desired-state device naming via JSON / object / function. */
+  aliases: AliasesApi;
   slothlet: {
     shutdown?: () => Promise<void>;
     [key: string]: unknown;
@@ -174,6 +178,8 @@ export async function createKasaApi(options: CreateKasaApiOptions = {}): Promise
   // link builds on the ref-supporting api.monitor + api.bulk, so it must come
   // after attachRefResolution / wrapMonitor / buildBulk.
   api.link = buildLink(api as unknown as Parameters<typeof buildLink>[0]).link;
+  // aliases uses api.devices + ref-supporting api.device.alias.set — both ready by now.
+  api.aliases = buildAliases(api as unknown as Parameters<typeof buildAliases>[0]);
 
   return api;
 }
@@ -209,6 +215,14 @@ export type {
   LinkOptions,
   LinkPropagation,
   LinkedGroup,
+  AliasesApi,
+  AliasMap,
+  AliasSource,
+  AliasOutcome,
+  ApplyOptions,
+  ApplyReport,
+  WatchAliasesOptions,
+  AliasWatcher,
   SignalEntry,
   SignalReportOptions,
   Bulkified,

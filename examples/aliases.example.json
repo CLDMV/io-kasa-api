@@ -1,0 +1,5 @@
+{
+  "10.8.1.99": "Replace this IP with a real one from `npm run discover -- --sweep <cidr> --min`",
+  "aa:bb:cc:dd:ee:ff": "MAC keys work too — any separator, any case",
+  "AABBCCDDEEFF": "And bare hex (no separators) too"
+}
