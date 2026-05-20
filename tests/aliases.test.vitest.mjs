@@ -47,6 +47,55 @@ async function startFakeNamedPlug(initialAlias, mac) {
   };
 }
 
+/**
+ * Build a fake multi-outlet strip (HS300 / KP200-style) with N children.
+ * The strip routes set_dev_alias to a specific child when the request
+ * carries a context.child_ids block, otherwise to the parent.
+ */
+async function startFakeStrip(parentAlias, mac, childAliases) {
+  let alias = parentAlias;
+  /** @type {Array<{ id: string; alias: string; state: 0 | 1 }>} */
+  const children = childAliases.map((a, i) => ({ id: `STRIP-CHILD-${i.toString().padStart(2, "0")}`, alias: a, state: 0 }));
+  const server = await startFakeTcp((cmd) => {
+    if (cmd.system?.set_dev_alias) {
+      const childId = cmd.context?.child_ids?.[0];
+      if (childId) {
+        const target = children.find((c) => c.id === childId);
+        if (target) target.alias = cmd.system.set_dev_alias.alias;
+      } else {
+        alias = cmd.system.set_dev_alias.alias;
+      }
+      return { system: { set_dev_alias: { err_code: 0 } } };
+    }
+    if (cmd.system?.get_sysinfo) {
+      return {
+        system: {
+          get_sysinfo: {
+            alias,
+            mac,
+            model: "KP200(US)",
+            child_num: children.length,
+            children: children.map((c) => ({ ...c }))
+          }
+        }
+      };
+    }
+    return { err: 1 };
+  });
+  return {
+    ...server,
+    get parentAlias() {
+      return alias;
+    },
+    childAlias(i) {
+      return children[i]?.alias;
+    },
+    childId(i) {
+      return children[i]?.id;
+    }
+  };
+}
+
 /** Wait for `event` on an EventEmitter (one-shot). */
 function nextEvent(emitter, event, timeoutMs = 4000) {
   return new Promise((resolve, reject) => {
@@ -172,6 +221,104 @@ describe("api.aliases.apply — one-shot rename", () => {
     } finally {
       await plug.close();
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("renames a child outlet via 'host/<index>' key", async () => {
+    const strip = await startFakeStrip("TP-LINK_Smart Plug_57A5", "AA:BB:CC:DD:EE:50", ["Old Top", "Old Bottom"]);
+    api.discovery.sweep = async () => [
+      {
+        host: "127.0.0.1",
+        port: strip.port,
+        sysInfo: {
+          alias: "TP-LINK_Smart Plug_57A5",
+          mac: "AA:BB:CC:DD:EE:50",
+          model: "KP200(US)",
+          child_num: 2,
+          children: [
+            { id: strip.childId(0), alias: "Old Top", state: 0 },
+            { id: strip.childId(1), alias: "Old Bottom", state: 0 }
+          ]
+        }
+      }
+    ];
+    await api.devices.refresh();
+    try {
+      const report = await api.aliases.apply(
+        {
+          "127.0.0.1/0": "LVR - SW - Top Plug",
+          "127.0.0.1/1": "LVR - SW - Bottom Plug"
+        },
+        { confirm: false }
+      );
+      expect(report.counts.renamed).toBe(2);
+      expect(report.outcomes[0].child).toBe(strip.childId(0));
+      expect(report.outcomes[1].child).toBe(strip.childId(1));
+      expect(strip.childAlias(0)).toBe("LVR - SW - Top Plug");
+      expect(strip.childAlias(1)).toBe("LVR - SW - Bottom Plug");
+      // Parent's own alias is untouched.
+      expect(strip.parentAlias).toBe("TP-LINK_Smart Plug_57A5");
+    } finally {
+      await strip.close();
+    }
+  });
+
+  it("renames a child by its full child ID (instead of index)", async () => {
+    const strip = await startFakeStrip("Strip", "AA:BB:CC:DD:EE:60", ["Outlet A", "Outlet B"]);
+    api.discovery.sweep = async () => [
+      {
+        host: "127.0.0.1",
+        port: strip.port,
+        sysInfo: {
+          alias: "Strip",
+          mac: "AA:BB:CC:DD:EE:60",
+          model: "KP200(US)",
+          child_num: 2,
+          children: [
+            { id: strip.childId(0), alias: "Outlet A", state: 0 },
+            { id: strip.childId(1), alias: "Outlet B", state: 0 }
+          ]
+        }
+      }
+    ];
+    await api.devices.refresh();
+    try {
+      const map = {};
+      map[`127.0.0.1/${strip.childId(1)}`] = "Renamed via ID";
+      const report = await api.aliases.apply(map, { confirm: false });
+      expect(report.counts.renamed).toBe(1);
+      expect(strip.childAlias(1)).toBe("Renamed via ID");
+      expect(strip.childAlias(0)).toBe("Outlet A");
+    } finally {
+      await strip.close();
+    }
+  });
+
+  it("'/N' key with no matching child resolves to missing", async () => {
+    const strip = await startFakeStrip("Strip", "AA:BB:CC:DD:EE:70", ["A", "B"]);
+    api.discovery.sweep = async () => [
+      {
+        host: "127.0.0.1",
+        port: strip.port,
+        sysInfo: {
+          alias: "Strip",
+          mac: "AA:BB:CC:DD:EE:70",
+          model: "KP200(US)",
+          child_num: 2,
+          children: [
+            { id: strip.childId(0), alias: "A", state: 0 },
+            { id: strip.childId(1), alias: "B", state: 0 }
+          ]
+        }
+      }
+    ];
+    await api.devices.refresh();
+    try {
+      const report = await api.aliases.apply({ "127.0.0.1/9": "Phantom" });
+      expect(report.counts.missing).toBe(1);
+      expect(report.outcomes[0].error).toMatch(/no child outlet/i);
+    } finally {
+      await strip.close();
     }
   });
 

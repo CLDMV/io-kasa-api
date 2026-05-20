@@ -83,16 +83,60 @@ async function loadSource(source: AliasSource, onError: (err: Error) => void): P
 }
 
 // -----------------------------------------------------------------------------
-// Key matching — find the DiscoveredDevice for an AliasMap key (IP or MAC).
+// Key parsing — `host[/childIndexOrId]` syntax.
+//
+// Map keys come in two shapes:
+//   "10.8.1.50"       → device-level alias (the strip / switch / bulb itself)
+//   "10.8.1.50/0"     → outlet 0 of a multi-outlet device (HS300 / KP200)
+//   "aa:bb:.../1"     → outlet 1, addressed by parent MAC
+//   "<...>/<long-hex>" → outlet identified by its full child ID
+//
+// IPv4 addresses contain dots but never slashes; MACs contain hex + : / -
+// but no slashes. So `/` is an unambiguous separator.
 // -----------------------------------------------------------------------------
 
-function matchDevice(devices: ReadonlyArray<DiscoveredDevice>, key: string): DiscoveredDevice | undefined {
-	if (isIpv4(key)) return devices.find((d) => d.host === key);
-	if (isMacLike(key)) {
-		const want = normMac(key);
+interface ParsedKey {
+	host: string;
+	/** When set, the right-hand side of the `/` — a digit index or a hex child ID. */
+	child?: string;
+}
+
+function parseKey(key: string): ParsedKey {
+	const slash = key.indexOf("/");
+	if (slash < 0) return { host: key };
+	return { host: key.slice(0, slash), child: key.slice(slash + 1) };
+}
+
+// -----------------------------------------------------------------------------
+// Device + child matching.
+// -----------------------------------------------------------------------------
+
+function matchDevice(devices: ReadonlyArray<DiscoveredDevice>, host: string): DiscoveredDevice | undefined {
+	if (isIpv4(host)) return devices.find((d) => d.host === host);
+	if (isMacLike(host)) {
+		const want = normMac(host);
 		return devices.find((d) => normMac(String(d.sysInfo.mac ?? d.sysInfo.mic_mac ?? "")) === want);
 	}
 	return undefined;
+}
+
+type SysInfoChild = { id: string; alias: string; state: 0 | 1 };
+
+/**
+ * Find a child outlet on `device` by index ("0", "1") or by its full child ID.
+ * Returns `undefined` if the device has no children or no match.
+ */
+function findChild(device: DiscoveredDevice, ref: string): SysInfoChild | undefined {
+	const kids = (device.sysInfo.children as SysInfoChild[] | undefined) ?? [];
+	if (kids.length === 0) return undefined;
+	// Numeric index first — most common in JSON maps.
+	if (/^\d+$/.test(ref)) {
+		const idx = Number(ref);
+		return kids[idx];
+	}
+	// Otherwise match by full child ID (case-insensitive — IDs are hex).
+	const want = ref.toLowerCase();
+	return kids.find((c) => c.id.toLowerCase() === want);
 }
 
 // -----------------------------------------------------------------------------
@@ -127,23 +171,50 @@ async function applyMap(
 			});
 			continue;
 		}
-		const device = matchDevice(devices, key);
+		const parsed = parseKey(key);
+		const device = matchDevice(devices, parsed.host);
 		if (!device) {
 			outcomes.push({ key, desired, action: "missing" });
 			continue;
 		}
-		const current = String(device.sysInfo.alias ?? "");
+
+		// Child-outlet key: resolve the index / ID against sysInfo.children.
+		let child: SysInfoChild | undefined;
+		if (parsed.child !== undefined) {
+			child = findChild(device, parsed.child);
+			if (!child) {
+				outcomes.push({
+					key,
+					desired,
+					host: device.host,
+					action: "missing",
+					error: `no child outlet matches "${parsed.child}" on ${device.host}`
+				});
+				continue;
+			}
+		}
+
+		const current = child ? String(child.alias ?? "") : String(device.sysInfo.alias ?? "");
 		if (current === desired) {
-			outcomes.push({ key, desired, current, host: device.host, action: "unchanged" });
+			outcomes.push({
+				key,
+				desired,
+				current,
+				host: device.host,
+				action: "unchanged",
+				...(child ? { child: child.id } : {})
+			});
 			continue;
 		}
+
 		// Preserve port from the discovered device — real Kasa is always 9999, but
 		// keeping it explicit lets tests (and odd setups) use non-standard ports.
 		const target: DeviceTarget = { host: device.host, port: device.port };
-		const setOptions = confirm ? { confirm: true } : undefined;
-		const result: OpResult = setOptions
-			? await api.device.alias.set(target, desired, setOptions)
-			: await api.device.alias.set(target, desired);
+		// Build options inline — only include set keys (exactOptionalPropertyTypes).
+		const setOptions: { confirm?: boolean; child?: string } = {};
+		if (confirm) setOptions.confirm = true;
+		if (child) setOptions.child = child.id;
+		const result: OpResult = await api.device.alias.set(target, desired, setOptions);
 		if (!result.ok) {
 			outcomes.push({
 				key,
@@ -151,7 +222,8 @@ async function applyMap(
 				current,
 				host: device.host,
 				action: "failed",
-				error: result.error ?? "unknown"
+				error: result.error ?? "unknown",
+				...(child ? { child: child.id } : {})
 			});
 			continue;
 		}
@@ -160,14 +232,16 @@ async function applyMap(
 			desired,
 			current,
 			host: device.host,
-			action: "renamed"
+			action: "renamed",
+			...(child ? { child: child.id } : {})
 		};
 		outcomes.push(outcome);
 		callbacks.onRenamed?.(outcome);
 
 		// Update the in-memory cached sysInfo so a watcher's next tick sees the
 		// new alias instantly (otherwise we'd rename it again from the stale cache).
-		(device.sysInfo as SysInfo).alias = desired;
+		if (child) child.alias = desired;
+		else (device.sysInfo as SysInfo).alias = desired;
 	}
 
 	const counts = {

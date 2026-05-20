@@ -58,6 +58,18 @@ export interface CommandOptions {
 	 * refs. Overrides the target's `force` and the global default.
 	 */
 	force?: boolean;
+	/**
+	 * Target a specific **child outlet** by its child ID for multi-outlet
+	 * devices (HS300 / KP200). The command's protocol body is wrapped in a
+	 * `context: { child_ids: [<this>] }` block.
+	 *
+	 * Currently honoured by `api.device.alias.set` only — pass a child ID to
+	 * rename one outlet of a strip rather than the strip itself. Ignored on
+	 * commands where it doesn't make sense (e.g. `reboot`, `led.set`).
+	 * `api.plug.children.set` already takes child IDs as an explicit argument
+	 * so it doesn't read this field.
+	 */
+	child?: string;
 }
 
 /**
@@ -834,7 +846,7 @@ export interface ApplyOptions {
 
 /** One row of an {@link ApplyReport}.outcomes — what happened to one map entry. */
 export interface AliasOutcome {
-	/** The map key (IP or MAC) as written. */
+	/** The map key (IP, MAC, or `<ip-or-mac>/<index>` for a child outlet) as written. */
 	key: string;
 	/** What the desired alias was. */
 	desired: string;
@@ -843,10 +855,16 @@ export interface AliasOutcome {
 	/** The host the key resolved to, if found. */
 	host?: string;
 	/**
+	 * Resolved child ID when the key targeted a specific outlet on a multi-
+	 * outlet device (HS300 / KP200). Absent for device-level rows.
+	 */
+	child?: string;
+	/**
 	 * What we did:
 	 *   - `"renamed"`   — alias differed; we wrote the new one.
 	 *   - `"unchanged"` — alias already matched the desired value.
-	 *   - `"missing"`   — no device on the network matched the key.
+	 *   - `"missing"`   — no device on the network matched the key, or the
+	 *                    `/<index>` referred to a child that doesn't exist.
 	 *   - `"failed"`    — found the device but the rename returned ok:false.
 	 */
 	action: "renamed" | "unchanged" | "missing" | "failed";

@@ -38,7 +38,7 @@ export const info: DeviceApi["info"] = {
 	get: (target) => self.events.run("device.info.get", target, [], () => rawSysInfo(target))
 };
 
-/** Device alias / display name. */
+/** Device alias / display name. Pass `options.child` to rename a child outlet. */
 export const alias: DeviceApi["alias"] = {
 	get: (target) =>
 		self.events.run("device.alias.get", target, [], async () => {
@@ -49,16 +49,25 @@ export const alias: DeviceApi["alias"] = {
 		self.events.run(
 			"device.alias.set",
 			target,
-			[value],
+			options?.child ? [value, { child: options.child }] : [value],
 			async () => {
-				const response = await self.protocol.send(target, { system: { set_dev_alias: { alias: value } } });
+				// Child rename — wrap the command in a context.child_ids block so
+				// the device routes the rename to that outlet (HS300 / KP200).
+				const command: Record<string, Record<string, unknown>> = { system: { set_dev_alias: { alias: value } } };
+				if (options?.child) command.context = { child_ids: [options.child] };
+				const response = await self.protocol.send(target, command);
 				return unwrap(response, "system", "set_dev_alias");
 			},
 			{
 				confirm: options?.confirm,
 				verify: async () => {
 					const r = await rawSysInfo(target);
-					return !self.events.isFailure(r) && r.alias === value;
+					if (self.events.isFailure(r)) return false;
+					if (options?.child) {
+						const kids = r.children ?? [];
+						return kids.find((c) => c.id === options.child)?.alias === value;
+					}
+					return r.alias === value;
 				}
 			}
 		)

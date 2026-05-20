@@ -1,5 +1,11 @@
 {
-  "10.8.1.99": "Replace this IP with a real one from `npm run discover -- --sweep <cidr> --min`",
+  "10.8.1.99": "Replace with a real IP from `npm run discover -- --sweep <cidr> --min`",
   "aa:bb:cc:dd:ee:ff": "MAC keys work too — any separator, any case",
-  "AABBCCDDEEFF": "And bare hex (no separators) too"
+  "AABBCCDDEEFF": "And bare hex (no separators)",
+
+  "10.8.1.50/0": "Outlet 0 of the strip at 10.8.1.50 — multi-outlet plugs (HS300 / KP200) address each outlet with /<index>",
+  "10.8.1.50/1": "Outlet 1 of the same strip",
+
+  "aa:bb:cc:dd:ee:ff/0": "MAC + child works too",
+  "10.8.1.51/8006DBCE2E0CB8598C67F26BBB7CB94B1F50998F00": "Or use the full hex child ID if you need to be precise"
 }

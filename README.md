@@ -415,8 +415,35 @@ Source format:
 {
   "10.8.1.35": "Staircase Light",
   "aa:bb:cc:dd:ee:ff": "Living Room Lamp",
-  "AABBCCDDEEFF": "Kitchen Pendant — MAC keys are case- and separator-insensitive"
+  "AABBCCDDEEFF": "Kitchen Pendant — MAC keys are case- and separator-insensitive",
+  "10.8.1.50/0": "Outlet 0 of a multi-outlet strip (HS300 / KP200)",
+  "10.8.1.50/1": "Outlet 1 of the same strip",
+  "aa:bb:cc:dd:ee:ff/0": "MAC + child also works"
 }
+```
+
+#### Multi-outlet plugs (HS300 / KP200)
+
+A multi-outlet strip has children — each outlet carries its own alias and is what users actually reference, not the parent's auto-generated `TP-LINK_Smart Plug_57A5`. Address an outlet with `<host>/<index>`:
+
+- `10.8.1.50/0` — outlet 0 (the parent's `sysInfo.children[0]`)
+- `10.8.1.50/1` — outlet 1
+- `aa:bb:cc:dd:ee:ff/0` — same, by parent MAC
+- `10.8.1.50/8006DBCE…F00` — exact match by full child ID (case-insensitive hex)
+
+Under the hood the rename wraps the protocol command in `context: { child_ids: [<id>] }`. The parent's alias is unaffected. `--min` from the discover tool prints exactly this key form so you can copy rows straight into the JSON map:
+
+```sh
+npm run discover -- --sweep 10.8.0.0/23 --min
+# Name                    IP            Model      MAC
+# Cario Cabinet           10.8.1.50/1   KP200(US)  6C:5A:B0:06:57:A5
+# Plug 1                  10.8.1.50/0   KP200(US)  6C:5A:B0:06:57:A5
+```
+
+For one-off child renames outside this helper, the low-level call is:
+
+```js
+await api.device.alias.set(target, "Top Outlet", { child: "<child id>", confirm: true });
 ```
 
 Worked examples in [`examples/rename-devices.mjs`](./examples/rename-devices.mjs)

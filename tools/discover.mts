@@ -155,11 +155,20 @@ function isMacShaped(filter: string): boolean {
   return /^[0-9a-fA-F:\-.]+$/.test(filter);
 }
 
-/** Substring match against alias / IP / MAC (case-insensitive; MAC hex-only). */
+/**
+ * Substring match against alias / IP / MAC / child-outlet alias (case-
+ * insensitive; MAC hex-only). For HS300 / KP200 strips the parent's auto-
+ * generated alias is meaningless — we also look at each child's alias so
+ * `--filter "Top Plug"` matches a strip whose outlets carry that name.
+ */
 function matchesFilter(device: { host: string; sysInfo: Record<string, unknown> }, filter: string): boolean {
   const needle = filter.toLowerCase();
   if (String(device.sysInfo.alias ?? "").toLowerCase().includes(needle)) return true;
   if (device.host.toLowerCase().includes(needle)) return true;
+  const children = device.sysInfo.children as Array<{ alias?: string }> | undefined;
+  if (Array.isArray(children) && children.some((c) => String(c.alias ?? "").toLowerCase().includes(needle))) {
+    return true;
+  }
   if (!isMacShaped(filter)) return false;
   // MAC-shaped — compare the hex-only form so callers don't have to match
   // separators. A short stripped needle (< 2 hex chars) is still likely too
@@ -170,17 +179,43 @@ function matchesFilter(device: { host: string; sysInfo: Record<string, unknown> 
   return macHex.includes(hexNeedle);
 }
 
-/** Render a compact `Name | IP | Model | MAC` table (Markdown-style pipes). */
+/**
+ * Render a compact `Name | IP | Model | MAC` table (Markdown-style pipes).
+ *
+ * Devices with `children` (HS300 / KP200 multi-outlet plugs) are expanded
+ * into one row per child outlet — the parent's auto-generated alias
+ * (`TP-LINK_Smart Plug_57A5` etc.) is meaningless, the outlets are the
+ * usable units. Each child row's `IP` column carries the canonical
+ * `<ip>/<index>` key form the `api.aliases.apply` JSON map accepts.
+ */
 function renderMinTable(devices: Array<{ host: string; sysInfo: Record<string, unknown> }>): string {
-  const rows = devices.map((d) => ({
-    name: String(d.sysInfo.alias ?? "(unnamed)"),
-    ip: d.host,
-    model: String(d.sysInfo.model ?? ""),
-    mac: String(d.sysInfo.mac ?? d.sysInfo.mic_mac ?? "")
-  }));
+  type Row = { name: string; ip: string; model: string; mac: string };
+  const rows: Row[] = [];
+  for (const d of devices) {
+    const model = String(d.sysInfo.model ?? "");
+    const mac = String(d.sysInfo.mac ?? d.sysInfo.mic_mac ?? "");
+    const children = d.sysInfo.children as Array<{ id: string; alias: string }> | undefined;
+    if (Array.isArray(children) && children.length > 0) {
+      children.forEach((c, i) =>
+        rows.push({
+          name: String(c.alias ?? "(unnamed)"),
+          ip: `${d.host}/${i}`,
+          model,
+          mac
+        })
+      );
+    } else {
+      rows.push({
+        name: String(d.sysInfo.alias ?? "(unnamed)"),
+        ip: d.host,
+        model,
+        mac
+      });
+    }
+  }
   // Alphabetise by name so the same network always prints the same order.
   rows.sort((a, b) => a.name.localeCompare(b.name));
-  const header = { name: "Name", ip: "IP", model: "Model", mac: "MAC" };
+  const header: Row = { name: "Name", ip: "IP", model: "Model", mac: "MAC" };
   const widths = {
     name: Math.max(header.name.length, ...rows.map((r) => r.name.length)),
     ip: Math.max(header.ip.length, ...rows.map((r) => r.ip.length)),
@@ -188,7 +223,7 @@ function renderMinTable(devices: Array<{ host: string; sysInfo: Record<string, u
     mac: Math.max(header.mac.length, ...rows.map((r) => r.mac.length))
   };
   const pad = (s: string, w: number): string => s + " ".repeat(Math.max(0, w - s.length));
-  const line = (r: typeof header): string =>
+  const line = (r: Row): string =>
     `${pad(r.name, widths.name)}  ${pad(r.ip, widths.ip)}  ${pad(r.model, widths.model)}  ${pad(r.mac, widths.mac)}`;
   const ruler = `${"-".repeat(widths.name)}  ${"-".repeat(widths.ip)}  ${"-".repeat(widths.model)}  ${"-".repeat(widths.mac)}`;
   return [line(header), ruler, ...rows.map(line)].join("\n");
