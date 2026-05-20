@@ -517,9 +517,10 @@ See [`examples/README.md`](./examples/README.md) for usage and the patterns they
 
 A device the Kasa app shows but `npm run discover` doesn't usually means one of:
 
-1. **Newer firmware that dropped the legacy LAN protocol.** TP-Link has migrated several SKU lines (parts of the HS, KP, KL series; many newer Matter-enabled devices) onto either **KLAP** (port 20002) or **Matter only** (Matter commissioning advertised over HTTP on port 80, `Server: SHIP 2.0`). Neither is implemented here.
-2. **Cloud-only LAN.** Some devices keep no useful local listener — they reach TP-Link's cloud, and the Kasa app talks to them via cloud. They'll appear in the app regardless of any LAN protocol.
-3. **Network reachability.** Firewall, VLAN, mDNS reflection, or a multi-NIC host that's binding broadcasts to the wrong interface. `--sweep <cidr>` (unicast TCP) bypasses broadcast issues; if that still doesn't find it, the next checks apply.
+1. **The "Third Party Compatibility" toggle is off.** Most common cause on newer Matter-enabled SKUs (ES20M dimmers, some KP/KS variants). Open the device in the Kasa app → settings → flip **Third Party Compatibility** ON. This gates the legacy XOR listener on port 9999 — with it off the device is *Matter-only* on the LAN even though it can speak both. Flip it on and the device immediately starts answering `--sweep`.
+2. **Newer firmware that dropped the legacy LAN protocol entirely.** TP-Link has migrated several SKU lines onto **KLAP** (port 20002) or **Matter only** (Matter commissioning advertised over HTTP on port 80, `Server: SHIP 2.0`). Neither is implemented here — but check the toggle in (1) first; many devices that *look* Matter-only just have the legacy listener gated.
+3. **Cloud-only LAN.** Some devices keep no useful local listener — they reach TP-Link's cloud, and the Kasa app talks to them via cloud. They'll appear in the app regardless of any LAN protocol.
+4. **Network reachability.** Firewall, VLAN, mDNS reflection, or a multi-NIC host that's binding broadcasts to the wrong interface. `--sweep <cidr>` (unicast TCP) bypasses broadcast issues; if that still doesn't find it, the next checks apply.
 
 Diagnose a specific IP with the built-in probe:
 
@@ -532,20 +533,21 @@ It probes TCP 9999 (legacy XOR), UDP 9999 (legacy discovery), TCP 20002 (KLAP), 
 ```
 Port    Service                    Status    Server    Hint
 ------  -------------------------  --------  --------  ----
-9999    Kasa legacy (XOR)          refused             ✓ this driver speaks this
+9999    Kasa legacy (XOR)          ★ OPEN              ✓ this driver speaks this
 20002   KLAP (newer HS / KP)       refused             ✗ not implemented here
 50443   Tapo TLS                   refused             ✗ not implemented here
 443     HTTPS                      refused             informational
 80      HTTP                       ★ OPEN    SHIP 2.0  informational
-9999    Kasa legacy (UDP unicast)  timeout             no reply / not listening
+9999    Kasa legacy (UDP unicast)  ★ OPEN              ✓ device answered get_sysinfo over UDP
 
-→ Matter commissioning (Server: "SHIP 2.0") exposed on port 80 — this device
-  supports Matter. ...
+→ Legacy Kasa LAN protocol present — this driver can talk to it via api.* ✓
+  (also exposes Matter commissioning on port 80 — Server: "SHIP 2.0".
+  That's additive, not exclusive; controlling via legacy works fine.)
 ```
 
-A `Server: SHIP 2.0` banner on port 80 is the Matter Commissioning Protocol (CSA spec) — strong signal the device has moved to Matter. To control such devices use a Matter controller (Home Assistant's matter-server, Apple Home, Google Home, Alexa).
+`Server: SHIP 2.0` on port 80 means the device exposes the Matter Commissioning Protocol — it can be paired into a Matter fabric. **It does not preclude legacy LAN control** when "Third Party Compatibility" is on. If you see SHIP 2.0 *and* `9999 refused`, flip the toggle in the Kasa app first.
 
-Matter support could be added here (the spec is open; `matter.js` exists), but it's a different protocol stack — commissioning flow, NOC storage, CASE/PASE crypto — and a much larger build than the legacy XOR driver. It hasn't been done yet.
+If the legacy port really is gone (toggle on and 9999 still refused), the device is Matter-only on the LAN. To control it use a Matter controller (Home Assistant's matter-server, Apple Home, Google Home, Alexa). Matter support could be added here (the spec is open; `matter.js` exists), but it's a different protocol stack — commissioning flow, NOC storage, CASE/PASE crypto — and a much larger build than the legacy XOR driver. It hasn't been done yet.
 
 ## Development
 

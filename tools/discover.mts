@@ -374,29 +374,41 @@ if (cli.probe) {
   }
 
   /**
-   * Classify based on the probe results. Deliberately tentative — a "SHIP 2.0"
-   * banner only proves Matter commissioning is exposed; it doesn't prove the
-   * device has no other LAN listener. Cloud is also always a possibility for
-   * Kasa-app visibility, which doesn't require any local port at all.
+   * Classify based on the probe results. Deliberately tentative on multiple
+   * fronts:
+   *   - A "SHIP 2.0" banner on port 80 only proves Matter commissioning is
+   *     exposed. Many ES20M / KP / KS devices speak **both** Matter AND the
+   *     legacy XOR protocol — Matter is additive, not exclusive.
+   *   - A `refused` on 9999 in a single snapshot isn't proof of absence.
+   *     Some devices sleep their legacy listener and wake it on Kasa-app
+   *     activity, on a reboot grace period, or on a Wi-Fi reconnect. Re-probe
+   *     a few seconds after using the Kasa app before concluding it's gone.
+   *   - Cloud is always a possibility for Kasa-app visibility — a device with
+   *     no useful local port can still appear in the app via TP-Link's cloud.
    */
   function classify(rows: Array<{ port: number; status: string; server?: string }>, udpReply: boolean): string {
     const open = (p: number): boolean => rows.find((r) => r.port === p)?.status === "open";
     const server = (p: number): string => rows.find((r) => r.port === p)?.server ?? "";
+    const httpServer = server(80);
+    const isShip = open(80) && /ship/i.test(httpServer);
     if (open(9999) || udpReply) {
-      return "Legacy Kasa LAN protocol present — this driver can talk to it via api.* ✓";
+      return isShip
+        ? `Legacy Kasa LAN protocol present — this driver can talk to it via api.* ✓\n  (also exposes Matter commissioning on port 80 — Server: "${httpServer}". That's additive, not exclusive; controlling via legacy works fine.)`
+        : "Legacy Kasa LAN protocol present — this driver can talk to it via api.* ✓";
     }
     if (open(20002)) return "KLAP listener present (newer Kasa firmware). This driver doesn't implement KLAP yet.";
     if (open(50443)) return "Tapo TLS listener present. This driver doesn't implement Tapo yet.";
-    const httpServer = server(80);
-    const tail =
+    const cloudTail =
       "If the Kasa app still sees it, the device is likely reaching TP-Link's cloud — local LAN isn't required for app visibility.";
-    if (open(80) && /ship/i.test(httpServer)) {
-      return `Matter commissioning (Server: "${httpServer}") exposed on port 80 — this device supports Matter. That alone doesn't mean Matter is the *only* path; the legacy LAN protocol may have been disabled in firmware, or it may only respond to the Kasa app's specific auth handshake. ${tail}`;
+    const sleepTail =
+      "Most common fix on newer Matter-enabled SKUs (ES20M, KP/KS variants, etc.): open the device in the Kasa app and toggle \"Third Party Compatibility\" ON — that gates the legacy XOR listener on port 9999. With it off, the device speaks only Matter on the LAN. Other causes: a Wi-Fi blip or post-reboot grace period; re-probe a few seconds after the next Kasa-app interaction.";
+    if (isShip) {
+      return `Matter commissioning (Server: "${httpServer}") exposed on port 80, no legacy Kasa port answering right now. Many devices expose both Matter and the legacy XOR protocol — ${sleepTail} If it really is Matter-only on the LAN: ${cloudTail}`;
     }
     if (open(80) || open(443)) {
-      return `HTTP/HTTPS listener present (Server: "${httpServer || server(443)}") but no known Kasa protocol port. ${tail}`;
+      return `HTTP/HTTPS listener present (Server: "${httpServer || server(443)}") but no known Kasa protocol port. ${sleepTail} ${cloudTail}`;
     }
-    return `No known TP-Link / Tapo / Matter port is open. ${tail} Or the IP doesn't host a TP-Link device at all.`;
+    return `No known TP-Link / Tapo / Matter port is open. ${sleepTail} ${cloudTail} Or the IP doesn't host a TP-Link device at all.`;
   }
 
   console.error(`Probing ${cli.probe} (timeout=${TIMEOUT_MS}ms per port)...\n`);
