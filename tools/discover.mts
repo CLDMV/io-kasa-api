@@ -144,17 +144,30 @@ function normMac(s: string | undefined): string {
   return (s ?? "").replace(/[^0-9a-fA-F]/g, "").toLowerCase();
 }
 
+/**
+ * A filter string is "MAC-shaped" if every character is a hex digit or a
+ * MAC-allowed separator (`:` / `-` / `.`). Words like `"stair"` aren't MAC-
+ * shaped (the `s`, `t`, `i`, `r` aren't hex), so we skip the MAC check —
+ * otherwise stripping non-hex would leave one stray `"a"` matching every
+ * device's MAC.
+ */
+function isMacShaped(filter: string): boolean {
+  return /^[0-9a-fA-F:\-.]+$/.test(filter);
+}
+
 /** Substring match against alias / IP / MAC (case-insensitive; MAC hex-only). */
 function matchesFilter(device: { host: string; sysInfo: Record<string, unknown> }, filter: string): boolean {
   const needle = filter.toLowerCase();
-  const aliasHit = String(device.sysInfo.alias ?? "")
-    .toLowerCase()
-    .includes(needle);
-  if (aliasHit) return true;
+  if (String(device.sysInfo.alias ?? "").toLowerCase().includes(needle)) return true;
   if (device.host.toLowerCase().includes(needle)) return true;
-  // For MAC, compare the hex-only form so users don't have to know separators.
+  if (!isMacShaped(filter)) return false;
+  // MAC-shaped — compare the hex-only form so callers don't have to match
+  // separators. A short stripped needle (< 2 hex chars) is still likely too
+  // promiscuous; require at least 2 hex chars before any MAC match counts.
+  const hexNeedle = filter.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
+  if (hexNeedle.length < 2) return false;
   const macHex = normMac(String(device.sysInfo.mac ?? device.sysInfo.mic_mac ?? ""));
-  return macHex.includes(needle.replace(/[^0-9a-f]/g, ""));
+  return macHex.includes(hexNeedle);
 }
 
 /** Render a compact `Name | IP | Model | MAC` table (Markdown-style pipes). */
