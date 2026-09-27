@@ -23,6 +23,11 @@ export default defineConfig({
 		// "dot" keeps CI logs to one character per test file instead of a full
 		// per-file pass/fail block; the final summary is printed either way.
 		reporters: ["dot"],
+		// Load slothlet through vitest's module graph (slothlet docs/TESTING.md) so leaves it
+		// loads can attribute to coverage. Note: this repo's leaves are TypeScript, which
+		// slothlet transpiles with esbuild into its own cache and imports from there, so
+		// src/api/** still reports 0% even though the tests exercise every module.
+		server: { deps: { inline: [/@cldmv\/slothlet/] } },
 		coverage: {
 			provider: "v8",
 			include: ["src/**"],
