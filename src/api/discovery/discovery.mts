@@ -168,7 +168,10 @@ async function discoverImpl(options: DiscoverOptions): Promise<DiscoveredDevice[
 	const maxDevices = options.maxDevices ?? Infinity;
 
 	let broadcast = options.broadcast;
-	let bindAddress = options.bindAddress;
+	// A loopback target (a local simulator or test double) only ever answers on the
+	// loopback interface: a socket bound to a LAN address sends fine but never sees the
+	// reply, since Linux drops a 127.x-sourced packet addressed to a non-loopback IP.
+	let bindAddress = options.bindAddress ?? (broadcast?.startsWith("127.") ? "127.0.0.1" : undefined);
 	if (!broadcast || !bindAddress) {
 		const resolved = resolveBroadcastSync(options.baseIp);
 		if (resolved) {
