@@ -134,7 +134,7 @@ export type KasaApi = Omit<SelfApi, "device" | "plug" | "switch" | "dimmer" | "m
 export async function createKasaApi(options: CreateKasaApiOptions = {}): Promise<KasaApi> {
 	const dir = options.dir ?? resolve(HERE, "api");
 	const built = await slothlet({
-		dir,
+		base: dir,
 		mode: options.mode ?? "eager",
 		debug: options.debug ?? false,
 		context: options.context ?? {},
