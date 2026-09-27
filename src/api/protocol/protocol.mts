@@ -123,7 +123,10 @@ export async function send(target: DeviceTarget, command: KasaCommand): Promise<
 		};
 
 		socket.setTimeout(timeoutMs, () => settle(new Error(`Kasa TCP timeout to ${host}:${port}`)));
-		socket.once("error", (err) => settle(err));
+		// `on`, not `once`: a socket can emit more than one error (e.g. a reset after a
+		// write error), and an unlistened second one crashes the process. settle() is
+		// idempotent, so later errors are simply ignored.
+		socket.on("error", (err) => settle(err));
 		socket.once("connect", () => socket.write(frame));
 
 		socket.on("data", (chunk) => {
@@ -184,7 +187,8 @@ export async function sendUdp(target: DeviceTarget, command: KasaCommand): Promi
 		};
 
 		const timer = setTimeout(() => settle(new Error(`Kasa UDP timeout to ${host}:${port}`)), timeoutMs);
-		socket.once("error", (err) => settle(err));
+		// `on`, not `once`: see send() — settle() is idempotent.
+		socket.on("error", (err) => settle(err));
 		socket.on("message", (msg, rinfo) => {
 			if (rinfo.address !== host) return;
 			const decoded = decryptUdp(msg);

@@ -191,7 +191,8 @@ async function discoverImpl(options: DiscoverOptions): Promise<DiscoveredDevice[
 			else resolve(Array.from(found.values()));
 		};
 
-		socket.once("error", (err) => finish(err));
+		// `on`, not `once`: a later socket error must not go unlistened; finish() is idempotent.
+		socket.on("error", (err) => finish(err));
 		socket.on("message", (msg, rinfo) => {
 			try {
 				const parsed = JSON.parse(self.protocol.decryptUdp(msg)) as { system?: { get_sysinfo?: SysInfo } };
