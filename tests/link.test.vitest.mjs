@@ -62,7 +62,9 @@ describe("MonitorEvent.cause — self vs external attribution", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("baseline 'state' event has cause: 'unknown'", async () => {
@@ -147,7 +149,9 @@ describe("api.link — device-linking helper", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("propagates an external 'on' from one device to the rest, without feedback loop", async () => {

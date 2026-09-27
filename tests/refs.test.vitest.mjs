@@ -64,7 +64,9 @@ describe("ref resolution — single-device commands", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("accepts an IPv4 string — synthesises { host: ip } and fires blind", async () => {
@@ -139,7 +141,9 @@ describe("ref resolution — force option", () => {
     restoreSweep?.();
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("per-call force:true is plumbed into devices.resolve", async () => {
@@ -199,7 +203,9 @@ describe("api.bulk — mixed-ref arrays", () => {
     restoreSweep?.();
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("accepts an array of DeviceTarget objects (back-compat)", async () => {
@@ -257,7 +263,9 @@ describe("api.signal.report — stringy shorthand", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("a CIDR string routes to discovery.sweep (no broadcast)", async () => {

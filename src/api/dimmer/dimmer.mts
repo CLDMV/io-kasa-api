@@ -11,11 +11,13 @@
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
 import type {
+	CommandOptions,
 	DimmerActionMode,
 	DimmerApi,
 	DimmerParameters,
 	DeviceTarget,
 	Failure,
+	OpResult,
 	SelfApi,
 	SysInfo
 } from "../../lib/types.mts";
@@ -142,7 +144,7 @@ export const gentle: DimmerApi["gentle"] = {
 
 /** Shared body for `doubleClick.set` / `longPress.set` (only the verb differs). */
 function buildPressAction(op: string, method: string, behaviorKey: "double_click" | "long_press"): {
-	set: (target: DeviceTarget, mode: DimmerActionMode, brightnessLevel?: number, options?: import("../../lib/types.mts").CommandOptions) => Promise<import("../../lib/types.mts").OpResult>;
+	set: (target: DeviceTarget, mode: DimmerActionMode, brightnessLevel?: number, options?: CommandOptions) => Promise<OpResult>;
 } {
 	return {
 		set: (target, mode, brightnessLevel, options) =>

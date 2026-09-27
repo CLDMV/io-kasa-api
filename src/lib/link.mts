@@ -25,7 +25,6 @@ import type {
 	MonitorApi,
 	MonitorEvent,
 	OpResult,
-	WatchOptions,
 	WithRefSupport
 } from "./types.mts";
 

@@ -89,7 +89,9 @@ describe("plug.on / off with target.child — single outlet on a strip", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("turns on only the specified child outlet; other outlets unchanged", async () => {
@@ -143,7 +145,9 @@ describe("plug.on / off without target.child — strip broadcast", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("on(strip) broadcasts to every child outlet in a single command", async () => {
@@ -188,7 +192,6 @@ describe("plug.on / off without target.child — strip broadcast", () => {
       expect(strip.childState(0)).toBe(0);
       expect(strip.childState(1)).toBe(0);
       // One on, one off → toggle → all off (any-on → all-off).
-      strip.childState; // (silence unused warning)
       await api.plug.on({ host: "127.0.0.1", port: strip.port, child: strip.childId(0) });
       r = await api.plug.toggle({ host: "127.0.0.1", port: strip.port });
       expect(r.value).toBe(0);
@@ -209,7 +212,9 @@ describe("ref forms address children — host/<index>, host/<childId>, child ali
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("'127.0.0.1/0' resolves to the strip's first child", async () => {
@@ -308,7 +313,9 @@ describe("duplicate child alias — first match + warning", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("api.devices.resolve picks first; emits a devices.resolve event with warning + matches", async () => {

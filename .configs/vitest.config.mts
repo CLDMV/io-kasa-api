@@ -20,5 +20,14 @@ export default defineConfig({
 		globals: false,
 		pool: "forks",
 		testTimeout: 30000,
+		// "dot" keeps CI logs to one character per test file instead of a full
+		// per-file pass/fail block; the final summary is printed either way.
+		reporters: ["dot"],
+		coverage: {
+			provider: "v8",
+			include: ["src/**"],
+			// json-summary produces coverage/coverage-summary.json for the CI coverage badge.
+			reporter: ["text", "html", "json-summary", "json"],
+		},
 	},
 });

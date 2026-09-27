@@ -14,7 +14,9 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     await api?.slothlet?.shutdown?.();
-  } catch {}
+  } catch {
+    // Best-effort teardown: the API may never have finished loading.
+  }
 });
 
 /** Resolve with the first `event` whose payload matches `predicate`; cleans up. */

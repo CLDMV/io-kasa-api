@@ -120,7 +120,9 @@ describe("api.aliases.apply — one-shot rename", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("renames a drifted alias matched by IP", async () => {
@@ -345,7 +347,9 @@ describe("api.aliases.watch — interval drift correction", () => {
   afterAll(async () => {
     try {
       await api?.slothlet?.shutdown?.();
-    } catch {}
+    } catch {
+      // Best-effort teardown: the API may never have finished loading.
+    }
   });
 
   it("re-applies on each tick when the source is a live-updating function", async () => {
@@ -394,14 +398,10 @@ describe("api.aliases.watch — interval drift correction", () => {
 
   it("stop() halts the interval and emits 'stop'", async () => {
     const w = api.aliases.watch({}, { intervalMs: 60_000, runImmediately: false });
-    try {
-      const stopped = nextEvent(w, "stop", 2000);
-      w.stop();
-      await stopped;
-      // Idempotent
-      w.stop();
-    } catch (err) {
-      throw err;
-    }
+    const stopped = nextEvent(w, "stop", 2000);
+    w.stop();
+    await stopped;
+    // Idempotent
+    w.stop();
   });
 });

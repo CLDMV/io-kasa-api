@@ -11,11 +11,19 @@
 	},
 	"scripts": {
 		"build": "tsc -p .configs/tsconfig.build.json",
+		"build:ci": "npm run typecheck && npm run build",
 		"typecheck": "tsc -p .configs/tsconfig.base.json",
-		"test": "vitest run --config .configs/vitest.config.mts",
+		"test": "node tests/run-vitest.mjs",
 		"test:watch": "vitest --config .configs/vitest.config.mts",
+		"coverage": "node tests/run-vitest.mjs --coverage-quiet",
+		"ci:coverage": "npm run coverage",
 		"discover": "node --no-warnings --experimental-strip-types tools/discover.mts",
-		"prepublishOnly": "npm run build"
+		"prepublishOnly": "npm run build",
+		"lint": "eslint --config .configs/eslint.config.mjs .",
+		"lint:fix": "eslint --config .configs/eslint.config.mjs . --fix",
+		"format": "prettier --config .configs/.prettierrc --write .",
+		"format:check": "prettier --config .configs/.prettierrc --check .",
+		"prepare": "node -e \"import('./.githooks/install.mjs').catch(()=>{})\""
 	},
 	"keywords": [
 		"kasa",
@@ -74,10 +82,19 @@
 		"esbuild": "^0.28.0"
 	},
 	"devDependencies": {
+		"@cldmv/jsonv": "^1.0.9",
+		"@cldmv/prettier-plugin-jsonv": "^1.0.6",
 		"@cldmv/slothlet-types": "^3.20.0",
+		"@cldmv/vitest-runner": "^1.4.2",
+		"@eslint/js": "^10.0.1",
 		"@types/node": "^22.19.19",
+		"@vitest/coverage-v8": "^5.0.2",
+		"eslint": "^10.11.0",
+		"globals": "^17.12.0",
+		"prettier": "^3.9.9",
 		"typescript": "^6.0.3",
-		"vitest": "^2.1.8"
+		"typescript-eslint": "^8.70.1",
+		"vitest": "^5.0.2"
 	},
 	"files": [
 		"dist/",
