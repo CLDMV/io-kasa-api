@@ -19,15 +19,7 @@ import { createSocket } from "node:dgram";
 import { networkInterfaces } from "node:os";
 import type { NetworkInterfaceInfo } from "node:os";
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type {
-	DiscoverOptions,
-	DiscoveredDevice,
-	Failure,
-	ResolvedBroadcast,
-	SelfApi,
-	SweepOptions,
-	SysInfo
-} from "../../lib/types.mts";
+import type { DiscoverOptions, DiscoveredDevice, Failure, ResolvedBroadcast, SelfApi, SweepOptions, SysInfo } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 
@@ -96,10 +88,7 @@ function listIPv4Interfaces(getInterfaces: GetInterfacesFn): Array<{
  * Exported for tests; the public {@link resolveBroadcast} wraps this with the
  * event/no-throw machinery.
  */
-export function resolveBroadcastSync(
-	baseIp?: string,
-	getInterfaces: GetInterfacesFn = networkInterfaces
-): ResolvedBroadcast | null {
+export function resolveBroadcastSync(baseIp?: string, getInterfaces: GetInterfacesFn = networkInterfaces): ResolvedBroadcast | null {
 	const interfaces = listIPv4Interfaces(getInterfaces);
 
 	if (baseIp) {
@@ -144,7 +133,9 @@ export async function resolveBroadcast(
 		[baseIp],
 		() => {
 			const r = resolveBroadcastSync(baseIp, getInterfaces);
-			return r ?? self.events.failure("No usable IPv4 interface found for Kasa discovery. Pass `baseIp` explicitly or specify `broadcast`.");
+			return (
+				r ?? self.events.failure("No usable IPv4 interface found for Kasa discovery. Pass `baseIp` explicitly or specify `broadcast`.")
+			);
 		},
 		null
 	);

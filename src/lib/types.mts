@@ -606,12 +606,7 @@ export interface EventsApi {
 	 * no `target`/`host` and the function resolves to the raw value (or the
 	 * supplied `fallback` on failure) rather than an `OpResult`.
 	 */
-	runUntargeted<T>(
-		op: string,
-		args: unknown[],
-		work: () => Promise<T | Failure> | T | Failure,
-		fallback: T
-	): Promise<T>;
+	runUntargeted<T>(op: string, args: unknown[], work: () => Promise<T | Failure> | T | Failure, fallback: T): Promise<T>;
 }
 
 // Two views of the device-command surface live in this file:

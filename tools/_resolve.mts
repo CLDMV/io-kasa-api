@@ -25,9 +25,7 @@ export async function resolveOrExit(api: KasaApi, ref: string): Promise<DeviceTa
 			console.error("No Kasa devices found — check the CIDR (KASA_SWEEP env) and connectivity.");
 		} else {
 			console.error(`"${ref}" isn't among the ${devices.length} device(s) found:`);
-			for (const d of [...devices].sort((a, b) =>
-				String(a.sysInfo.alias ?? "").localeCompare(String(b.sysInfo.alias ?? ""))
-			)) {
+			for (const d of [...devices].sort((a, b) => String(a.sysInfo.alias ?? "").localeCompare(String(b.sysInfo.alias ?? "")))) {
 				console.error(`  ${d.sysInfo.alias ?? "(unnamed)"}  —  ${d.host}  ${d.sysInfo.mac ?? ""}`);
 			}
 		}

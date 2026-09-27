@@ -27,7 +27,7 @@ export default defineConfig({
 			provider: "v8",
 			include: ["src/**"],
 			// json-summary produces coverage/coverage-summary.json for the CI coverage badge.
-			reporter: ["text", "html", "json-summary", "json"],
-		},
-	},
+			reporter: ["text", "html", "json-summary", "json"]
+		}
+	}
 });

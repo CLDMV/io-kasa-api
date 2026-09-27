@@ -85,7 +85,12 @@ function findChildrenByAlias(devices: DiscoveredDevice[], ref: string): ChildHit
 		const kids = device.sysInfo.children as Array<{ id: string; alias: string; state: 0 | 1 }> | undefined;
 		if (!kids) continue;
 		for (const child of kids) {
-			if (String(child.alias ?? "").trim().toLowerCase() === want) hits.push({ device, child });
+			if (
+				String(child.alias ?? "")
+					.trim()
+					.toLowerCase() === want
+			)
+				hits.push({ device, child });
 		}
 	}
 	return hits;
@@ -164,7 +169,12 @@ export function buildDevices(api: AnyApi, defaultCidr: string = DEFAULT_CIDR): D
 		}
 		// Device-level alias first.
 		const wantName = ref.trim().toLowerCase();
-		const deviceMatch = devices.find((d) => String(d.sysInfo.alias ?? "").trim().toLowerCase() === wantName);
+		const deviceMatch = devices.find(
+			(d) =>
+				String(d.sysInfo.alias ?? "")
+					.trim()
+					.toLowerCase() === wantName
+		);
 		if (deviceMatch) return { device: deviceMatch };
 		// Fall back to child aliases — strips' outlets are what users actually
 		// reference, not the parent's auto-generated `TP-LINK_Smart Plug_*` name.

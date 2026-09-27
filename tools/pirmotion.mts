@@ -44,8 +44,8 @@ console.log("");
 // --- PIR config (read once) -----------------------------------------------------
 const cfgResult = await api.motion.pir.get(target);
 if (!cfgResult.ok || !cfgResult.value) {
-  console.error(`Could not read PIR config: ${cfgResult.error ?? "no value"}`);
-  process.exit(1);
+	console.error(`Could not read PIR config: ${cfgResult.error ?? "no value"}`);
+	process.exit(1);
 }
 const cfg = cfgResult.value as Record<string, unknown>;
 const enabled = Boolean(cfg.enable);
@@ -64,10 +64,10 @@ console.log(`  → motion when |pir_percent| > ${triggerBar}%\n`);
 
 /** python-kasa PIRStatus, computed from a raw ADC reading. */
 function pirStatus(adcValue: number): { value: number; percent: number; triggered: boolean } {
-  const value = adcMid - adcValue;
-  const divisor = value < 0 ? adcMid - adcMin : adcMax - adcMid;
-  const percent = divisor === 0 ? 0 : (value / divisor) * 100;
-  return { value, percent, triggered: enabled && Math.abs(percent) > triggerBar };
+	const value = adcMid - adcValue;
+	const divisor = value < 0 ? adcMid - adcMin : adcMax - adcMid;
+	const percent = divisor === 0 ? 0 : (value / divisor) * 100;
+	return { value, percent, triggered: enabled && Math.abs(percent) > triggerBar };
 }
 
 // --- Watch ----------------------------------------------------------------------
@@ -79,39 +79,39 @@ let wasTriggered = false;
 let peakPercent = 0;
 
 process.on("SIGINT", () => {
-  stopped = true;
-  console.log(`\n\n${samples} samples, ${triggers} trigger event(s), peak |pir_percent|=${peakPercent.toFixed(1)}%.`);
-  console.log(
-    peakPercent > triggerBar
-      ? "→ python-kasa's formula fires on this device — implement motion.pir.triggered in the API."
-      : `→ |pir_percent| never reached ${triggerBar}% — get_adc_value is too filtered; use behavioral detection.`
-  );
-  process.exit(0);
+	stopped = true;
+	console.log(`\n\n${samples} samples, ${triggers} trigger event(s), peak |pir_percent|=${peakPercent.toFixed(1)}%.`);
+	console.log(
+		peakPercent > triggerBar
+			? "→ python-kasa's formula fires on this device — implement motion.pir.triggered in the API."
+			: `→ |pir_percent| never reached ${triggerBar}% — get_adc_value is too filtered; use behavioral detection.`
+	);
+	process.exit(0);
 });
 
 while (!stopped) {
-  const r = await api.motion.pir.adc.get(target);
-  samples++;
-  if (!r.ok) {
-    process.stdout.write(`\r[${ts()}] (no answer)                                   `);
-  } else {
-    const adcValue = Number(r.value);
-    const s = pirStatus(adcValue);
-    peakPercent = Math.max(peakPercent, Math.abs(s.percent));
-    if (s.triggered && !wasTriggered) {
-      wasTriggered = true;
-      triggers++;
-      console.log(`\n[${ts()}] ★ MOTION  adc=${adcValue}  pir_percent=${s.percent.toFixed(1)}%`);
-    } else if (!s.triggered && wasTriggered) {
-      wasTriggered = false;
-      console.log(`[${ts()}]   …cleared  adc=${adcValue}  pir_percent=${s.percent.toFixed(1)}%`);
-    } else {
-      process.stdout.write(
-        `\r[${ts()}] adc=${String(adcValue).padStart(5)}  pir_percent=${s.percent.toFixed(1).padStart(7)}%  ${
-          s.triggered ? "MOTION" : "idle  "
-        }   `
-      );
-    }
-  }
-  await sleep(intervalMs);
+	const r = await api.motion.pir.adc.get(target);
+	samples++;
+	if (!r.ok) {
+		process.stdout.write(`\r[${ts()}] (no answer)                                   `);
+	} else {
+		const adcValue = Number(r.value);
+		const s = pirStatus(adcValue);
+		peakPercent = Math.max(peakPercent, Math.abs(s.percent));
+		if (s.triggered && !wasTriggered) {
+			wasTriggered = true;
+			triggers++;
+			console.log(`\n[${ts()}] ★ MOTION  adc=${adcValue}  pir_percent=${s.percent.toFixed(1)}%`);
+		} else if (!s.triggered && wasTriggered) {
+			wasTriggered = false;
+			console.log(`[${ts()}]   …cleared  adc=${adcValue}  pir_percent=${s.percent.toFixed(1)}%`);
+		} else {
+			process.stdout.write(
+				`\r[${ts()}] adc=${String(adcValue).padStart(5)}  pir_percent=${s.percent.toFixed(1).padStart(7)}%  ${
+					s.triggered ? "MOTION" : "idle  "
+				}   `
+			);
+		}
+	}
+	await sleep(intervalMs);
 }

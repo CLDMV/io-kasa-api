@@ -33,9 +33,9 @@ const cidr = positional[1] ?? process.env.KASA_SWEEP ?? "10.8.0.0/23";
 
 /** Read a `--name=<number>` flag, falling back to `def`. */
 const numFlag = (name: string, def: number): number => {
-  const hit = args.find((a) => a.startsWith(`--${name}=`));
-  const value = hit ? Number(hit.slice(name.length + 3)) : NaN;
-  return Number.isFinite(value) ? value : def;
+	const hit = args.find((a) => a.startsWith(`--${name}=`));
+	const value = hit ? Number(hit.slice(name.length + 3)) : NaN;
+	return Number.isFinite(value) ? value : def;
 };
 const intervalMs = numFlag("interval", 400);
 const clearMs = numFlag("clear", 5000);
@@ -48,13 +48,13 @@ const target = await resolveOrExit(api, aliasArg);
 console.log("");
 
 const monitor = relayMode
-  ? api.monitor.watch(target, { motion: true, intervalMs: 2000, motionIntervalMs: intervalMs, motionClearMs: clearMs })
-  : api.monitor.watchMotion(target, { intervalMs, clearMs });
+	? api.monitor.watch(target, { motion: true, intervalMs: 2000, motionIntervalMs: intervalMs, motionClearMs: clearMs })
+	: api.monitor.watchMotion(target, { intervalMs, clearMs });
 
 console.log(
-  relayMode
-    ? "Watching relay + motion (watch with motion:true). Move in front; toggle the light too."
-    : "Watching motion (watchMotion). Move in front of the sensor."
+	relayMode
+		? "Watching relay + motion (watch with motion:true). Move in front; toggle the light too."
+		: "Watching motion (watchMotion). Move in front of the sensor."
 );
 console.log(`PIR poll interval ${intervalMs}ms (floor 250), clear window ${clearMs}ms. Ctrl-C to stop.\n`);
 
@@ -63,13 +63,13 @@ monitor.on("clear", (e) => console.log(`[${ts()}]   cleared   after ${e.duration
 monitor.on("error", (e) => console.log(`[${ts()}]   (poll error: ${e.message})`));
 
 if (relayMode) {
-  monitor.on("state", (e) => console.log(`[${ts()}]   relay baseline: ${e.relayState === 1 ? "ON" : "OFF"}`));
-  monitor.on("on", (e) => console.log(`[${ts()}] ▲ relay ON   (triggeredBy=${e.triggeredBy})`));
-  monitor.on("off", () => console.log(`[${ts()}] ▼ relay OFF`));
+	monitor.on("state", (e) => console.log(`[${ts()}]   relay baseline: ${e.relayState === 1 ? "ON" : "OFF"}`));
+	monitor.on("on", (e) => console.log(`[${ts()}] ▲ relay ON   (triggeredBy=${e.triggeredBy})`));
+	monitor.on("off", () => console.log(`[${ts()}] ▼ relay OFF`));
 }
 
 process.on("SIGINT", () => {
-  monitor.stop();
-  console.log("\nStopped.");
-  process.exit(0);
+	monitor.stop();
+	console.log("\nStopped.");
+	process.exit(0);
 });

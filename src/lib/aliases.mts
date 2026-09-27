@@ -148,12 +148,7 @@ interface RenameCallbacks {
 	onRenamed?: (outcome: AliasOutcome) => void;
 }
 
-async function applyMap(
-	api: AnyApi,
-	map: AliasMap,
-	options: ApplyOptions,
-	callbacks: RenameCallbacks = {}
-): Promise<ApplyReport> {
+async function applyMap(api: AnyApi, map: AliasMap, options: ApplyOptions, callbacks: RenameCallbacks = {}): Promise<ApplyReport> {
 	const confirm = options.confirm ?? true;
 	const force = options.force ?? false;
 

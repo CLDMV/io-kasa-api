@@ -29,57 +29,55 @@ console.log(`Polling every ${intervalMs}ms — press Ctrl-C to stop.\n`);
 
 /** Stable JSON for value comparison (sorts object keys). */
 const stable = (v: unknown): string =>
-  JSON.stringify(v, (_k, val) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort())
-      : val
-  );
+	JSON.stringify(v, (_k, val) =>
+		val && typeof val === "object" && !Array.isArray(val) ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort()) : val
+	);
 
 let prev: Record<string, unknown> | null = null;
 let pollCount = 0;
 let stopped = false;
 
 process.on("SIGINT", () => {
-  stopped = true;
-  console.log(`\nStopped after ${pollCount} polls.`);
-  process.exit(0);
+	stopped = true;
+	console.log(`\nStopped after ${pollCount} polls.`);
+	process.exit(0);
 });
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const ts = (): string => new Date().toLocaleTimeString();
 
 while (!stopped) {
-  pollCount++;
-  const result = await api.device.info.get(target);
+	pollCount++;
+	const result = await api.device.info.get(target);
 
-  if (!result.ok || !result.value) {
-    console.log(`[${ts()}] poll #${pollCount}: unreachable — ${result.error ?? "no value"}`);
-    await sleep(intervalMs);
-    continue;
-  }
+	if (!result.ok || !result.value) {
+		console.log(`[${ts()}] poll #${pollCount}: unreachable — ${result.error ?? "no value"}`);
+		await sleep(intervalMs);
+		continue;
+	}
 
-  const info = result.value as Record<string, unknown>;
+	const info = result.value as Record<string, unknown>;
 
-  if (prev === null) {
-    console.log(`[${ts()}] poll #${pollCount}: full sysInfo —`);
-    console.dir(info, { depth: null, colors: true });
-    console.log("");
-  } else {
-    const changes: string[] = [];
-    const keys = new Set([...Object.keys(prev), ...Object.keys(info)]);
-    for (const key of [...keys].sort()) {
-      const before = stable(prev[key]);
-      const after = stable(info[key]);
-      if (before !== after) changes.push(`    ${key}: ${before ?? "—"} → ${after ?? "—"}`);
-    }
-    if (changes.length > 0) {
-      console.log(`[${ts()}] poll #${pollCount}: ${changes.length} field(s) changed —`);
-      console.log(changes.join("\n"));
-    } else {
-      process.stdout.write(`\r[${ts()}] poll #${pollCount}: no change   `);
-    }
-  }
+	if (prev === null) {
+		console.log(`[${ts()}] poll #${pollCount}: full sysInfo —`);
+		console.dir(info, { depth: null, colors: true });
+		console.log("");
+	} else {
+		const changes: string[] = [];
+		const keys = new Set([...Object.keys(prev), ...Object.keys(info)]);
+		for (const key of [...keys].sort()) {
+			const before = stable(prev[key]);
+			const after = stable(info[key]);
+			if (before !== after) changes.push(`    ${key}: ${before ?? "—"} → ${after ?? "—"}`);
+		}
+		if (changes.length > 0) {
+			console.log(`[${ts()}] poll #${pollCount}: ${changes.length} field(s) changed —`);
+			console.log(changes.join("\n"));
+		} else {
+			process.stdout.write(`\r[${ts()}] poll #${pollCount}: no change   `);
+		}
+	}
 
-  prev = info;
-  await sleep(intervalMs);
+	prev = info;
+	await sleep(intervalMs);
 }

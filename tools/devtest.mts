@@ -29,27 +29,27 @@ let fail = 0;
 
 /** Run one step: perform `action`, settle, then check `verify`. */
 async function step(label: string, action: () => Promise<{ ok: boolean }>, verify: () => Promise<boolean>): Promise<void> {
-  process.stdout.write(`• ${label} ... `);
-  const result = await action();
-  if (!result.ok) {
-    console.log(`FAILED (command not ok)`);
-    fail++;
-    return;
-  }
-  await sleep(1200);
-  const ok = await verify();
-  console.log(ok ? "OK" : "MISMATCH");
-  if (ok) pass++;
-  else fail++;
+	process.stdout.write(`• ${label} ... `);
+	const result = await action();
+	if (!result.ok) {
+		console.log(`FAILED (command not ok)`);
+		fail++;
+		return;
+	}
+	await sleep(1200);
+	const ok = await verify();
+	console.log(ok ? "OK" : "MISMATCH");
+	if (ok) pass++;
+	else fail++;
 }
 
 const stateIs = (want: 0 | 1) => async (): Promise<boolean> => {
-  const r = await api.switch.power.get(target);
-  return r.ok && r.value === want;
+	const r = await api.switch.power.get(target);
+	return r.ok && r.value === want;
 };
 const brightnessIs = (want: number) => async (): Promise<boolean> => {
-  const r = await api.device.info.get(target);
-  return r.ok && Number(r.value?.brightness) === want;
+	const r = await api.device.info.get(target);
+	return r.ok && Number(r.value?.brightness) === want;
 };
 
 // 1. Toggle it on and off.
@@ -59,17 +59,17 @@ await step("turn OFF", () => api.switch.off(target), stateIs(0));
 // 2. Turn it on and change its dimming.
 await step("turn ON", () => api.switch.on(target), stateIs(1));
 for (const level of [25, 50, 75]) {
-  await step(`dim to ${level}%`, () => api.dimmer.brightness.set(target, level), brightnessIs(level));
+	await step(`dim to ${level}%`, () => api.dimmer.brightness.set(target, level), brightnessIs(level));
 }
 
 // 3. Finish: on, dimmed to 100%.
 await step(
-  "turn ON + dim to 100%",
-  () => api.dimmer.brightness.set(target, 100),
-  async () => {
-    const r = await api.device.info.get(target);
-    return r.ok && r.value?.relay_state === 1 && Number(r.value?.brightness) === 100;
-  }
+	"turn ON + dim to 100%",
+	() => api.dimmer.brightness.set(target, 100),
+	async () => {
+		const r = await api.device.info.get(target);
+		return r.ok && r.value?.relay_state === 1 && Number(r.value?.brightness) === 100;
+	}
 );
 
 console.log(`\n${pass} passed, ${fail} failed.`);

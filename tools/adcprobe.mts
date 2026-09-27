@@ -55,25 +55,25 @@ const window: number[] = [];
 const WINDOW = 40; // rolling window length
 
 process.on("SIGINT", () => {
-  stopped = true;
-  console.log(`\nStopped after ${samples} samples.`);
-  process.exit(0);
+	stopped = true;
+	console.log(`\nStopped after ${samples} samples.`);
+	process.exit(0);
 });
 
 while (!stopped) {
-  const r = await api.motion.pir.adc.get(target);
-  samples++;
-  if (!r.ok) {
-    process.stdout.write(`\r[${ts()}] adc unavailable — ${r.error}            `);
-  } else {
-    const value = Number(r.value);
-    window.push(value);
-    if (window.length > WINDOW) window.shift();
-    const min = Math.min(...window);
-    const max = Math.max(...window);
-    const mean = Math.round(window.reduce((a, b) => a + b, 0) / window.length);
-    const bar = "█".repeat(Math.min(40, Math.max(0, Math.round((value - min) / Math.max(1, max - min) * 40))));
-    process.stdout.write(`\r[${ts()}] adc=${String(value).padStart(5)}  win[min=${min} mean=${mean} max=${max}] ${bar.padEnd(40)}`);
-  }
-  await sleep(intervalMs);
+	const r = await api.motion.pir.adc.get(target);
+	samples++;
+	if (!r.ok) {
+		process.stdout.write(`\r[${ts()}] adc unavailable — ${r.error}            `);
+	} else {
+		const value = Number(r.value);
+		window.push(value);
+		if (window.length > WINDOW) window.shift();
+		const min = Math.min(...window);
+		const max = Math.max(...window);
+		const mean = Math.round(window.reduce((a, b) => a + b, 0) / window.length);
+		const bar = "█".repeat(Math.min(40, Math.max(0, Math.round(((value - min) / Math.max(1, max - min)) * 40))));
+		process.stdout.write(`\r[${ts()}] adc=${String(value).padStart(5)}  win[min=${min} mean=${mean} max=${max}] ${bar.padEnd(40)}`);
+	}
+	await sleep(intervalMs);
 }

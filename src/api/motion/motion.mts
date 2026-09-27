@@ -12,15 +12,7 @@
  * return as `self.events.failure(...)` sentinels.
  */
 import { self as rawSelf } from "@cldmv/slothlet/runtime";
-import type {
-	AmbientLightConfig,
-	DeviceTarget,
-	Failure,
-	MotionApi,
-	PirConfig,
-	PirStatus,
-	SelfApi
-} from "../../lib/types.mts";
+import type { AmbientLightConfig, DeviceTarget, Failure, MotionApi, PirConfig, PirStatus, SelfApi } from "../../lib/types.mts";
 
 const self = rawSelf as unknown as SelfApi;
 const PIR = "smartlife.iot.PIR";

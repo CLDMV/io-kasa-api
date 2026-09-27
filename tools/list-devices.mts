@@ -18,9 +18,7 @@ const api = await createKasaApi({ sweepCidr: cidr });
 console.error(`Sweeping ${cidr} ...`);
 const devices = await api.devices.list({ timeoutMs: 1000, concurrency: 128 });
 
-const names = devices
-  .map((d) => String(d.sysInfo.alias ?? "(unnamed)"))
-  .sort((a, b) => a.localeCompare(b));
+const names = devices.map((d) => String(d.sysInfo.alias ?? "(unnamed)")).sort((a, b) => a.localeCompare(b));
 
 for (const name of names) console.log(name);
 console.error(`${names.length} device(s).`);

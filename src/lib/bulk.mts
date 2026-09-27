@@ -113,11 +113,7 @@ function mirror(node: Node, deps: BulkDeps, concurrency: number, path: string): 
  * @param deps - Resolver, event bus, and the bus-level defaults snapshot.
  * @param concurrency - Default in-flight probe count for every bulk call.
  */
-export function buildBulk(
-	api: Record<string, Node>,
-	deps: BulkDeps,
-	concurrency: number = DEFAULT_CONCURRENCY
-): BulkApi {
+export function buildBulk(api: Record<string, Node>, deps: BulkDeps, concurrency: number = DEFAULT_CONCURRENCY): BulkApi {
 	const bulk: Record<string, Node> = {};
 	for (const moduleName of BULK_MODULES) {
 		const mod = api[moduleName];

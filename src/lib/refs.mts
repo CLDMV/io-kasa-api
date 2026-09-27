@@ -23,14 +23,7 @@
  * Imported by `index.mts` (the entry), not loaded by slothlet.
  */
 import { EventEmitter } from "node:events";
-import type {
-	CommandOptions,
-	DeviceMonitor,
-	DeviceRef,
-	DeviceTarget,
-	EventsApi,
-	OpResult
-} from "./types.mts";
+import type { CommandOptions, DeviceMonitor, DeviceRef, DeviceTarget, EventsApi, OpResult } from "./types.mts";
 import { isIpv4 } from "./devices.mts";
 import type { DevicesApiInternal } from "./devices.mts";
 
@@ -65,11 +58,7 @@ function peekOptions(args: ReadonlyArray<unknown>): CommandOptions | undefined {
 }
 
 /** Pick the effective `force`: per-call options > target field > global default. */
-export function effectiveForce(
-	ref: DeviceRef,
-	perCall: CommandOptions | undefined,
-	defaults: { force: boolean }
-): boolean {
+export function effectiveForce(ref: DeviceRef, perCall: CommandOptions | undefined, defaults: { force: boolean }): boolean {
 	if (perCall && typeof perCall.force === "boolean") return perCall.force;
 	if (typeof ref !== "string" && typeof ref.force === "boolean") return ref.force;
 	return defaults.force;
@@ -85,11 +74,7 @@ export function effectiveForce(
  * which sweeps and emits a `devices.resolve` event. Returns `null` when a
  * MAC / alias couldn't be matched after the (forced) re-sweep.
  */
-export async function refToTarget(
-	ref: DeviceRef,
-	devices: DevicesApiInternal,
-	force: boolean
-): Promise<DeviceTarget | null> {
+export async function refToTarget(ref: DeviceRef, devices: DevicesApiInternal, force: boolean): Promise<DeviceTarget | null> {
 	// Object ref: passthrough — no cache touch, no resolve call. `force` is moot.
 	if (typeof ref !== "string") return ref;
 	// IPv4 string: synthesised target — same passthrough rationale as the object case.
@@ -166,10 +151,7 @@ function wrapNode(node: Node, path: string, deps: WrapDeps): void {
  * Mutates the modules in place — `api.plug.on`, `api.switch.on(...)`, etc.
  * now accept any {@link DeviceRef}. Bulk and signal have their own wrappers.
  */
-export function attachRefResolution(
-	api: Record<string, unknown>,
-	deps: WrapDeps
-): void {
+export function attachRefResolution(api: Record<string, unknown>, deps: WrapDeps): void {
 	for (const moduleName of REF_MODULES) {
 		const mod = api[moduleName];
 		if (mod && typeof mod === "object") wrapNode(mod as Node, moduleName, deps);
@@ -186,7 +168,10 @@ export function attachRefResolution(
  * emit `"error"` + `"stop"` on the next tick when the ref doesn't match.
  */
 export function wrapMonitor(
-	monitor: { watch: (target: DeviceTarget, options?: unknown) => DeviceMonitor; watchMotion: (target: DeviceTarget, options?: unknown) => DeviceMonitor },
+	monitor: {
+		watch: (target: DeviceTarget, options?: unknown) => DeviceMonitor;
+		watchMotion: (target: DeviceTarget, options?: unknown) => DeviceMonitor;
+	},
 	deps: WrapDeps
 ): void {
 	const origWatch = monitor.watch.bind(monitor);

@@ -18,8 +18,8 @@ const action = (process.argv[3] ?? "").toLowerCase();
 const cidr = process.argv[4] ?? process.env.KASA_SWEEP ?? "10.8.0.0/23";
 
 if (!wanted || !["on", "off", "toggle"].includes(action)) {
-  console.error("Usage: power.mts <MAC|name|ip> <on|off|toggle> [cidr]");
-  process.exit(1);
+	console.error("Usage: power.mts <MAC|name|ip> <on|off|toggle> [cidr]");
+	process.exit(1);
 }
 
 const api = await createKasaApi({ sweepCidr: cidr });
@@ -27,15 +27,11 @@ const api = await createKasaApi({ sweepCidr: cidr });
 const target = await resolveOrExit(api, wanted);
 
 const result =
-  action === "on"
-    ? await api.switch.on(target)
-    : action === "off"
-      ? await api.switch.off(target)
-      : await api.switch.toggle(target);
+	action === "on" ? await api.switch.on(target) : action === "off" ? await api.switch.off(target) : await api.switch.toggle(target);
 
 if (!result.ok) {
-  console.error(`${action} failed: ${result.error}`);
-  process.exit(1);
+	console.error(`${action} failed: ${result.error}`);
+	process.exit(1);
 }
 
 const state = await api.switch.power.get(target);

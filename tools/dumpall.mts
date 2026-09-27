@@ -31,53 +31,50 @@ console.log("");
 type Probe = { ns: string; method: string; arg?: Record<string, unknown> };
 
 const PROBES: Probe[] = [
-  // Core
-  { ns: "system", method: "get_sysinfo" },
-  // Time
-  { ns: "time", method: "get_time" },
-  { ns: "time", method: "get_timezone" },
-  // Wi-Fi / network
-  { ns: "netif", method: "get_scaninfo", arg: { refresh: 0 } },
-  // Cloud
-  { ns: "cnCloud", method: "get_info" },
-  { ns: "smartlife.iot.common.cloud", method: "get_info" },
-  // Motion (PIR) sensor
-  { ns: "smartlife.iot.PIR", method: "get_config" },
-  { ns: "smartlife.iot.PIR", method: "get_adc_value" },
-  // Ambient-light (LAS) sensor
-  { ns: "smartlife.iot.LAS", method: "get_config" },
-  { ns: "smartlife.iot.LAS", method: "get_adc_value" },
-  // Dimmer
-  { ns: "smartlife.iot.dimmer", method: "get_dimmer_parameters" },
-  { ns: "smartlife.iot.dimmer", method: "get_default_behavior" },
-  // Rules
-  { ns: "smartlife.iot.common.schedule", method: "get_rules" },
-  { ns: "smartlife.iot.common.schedule", method: "get_next_action" },
-  { ns: "smartlife.iot.common.count_down", method: "get_rules" },
-  { ns: "smartlife.iot.common.anti_theft", method: "get_rules" },
-  // Energy (unlikely on a dimmer, probed for completeness)
-  { ns: "smartlife.iot.common.emeter", method: "get_realtime" },
-  { ns: "emeter", method: "get_realtime" }
+	// Core
+	{ ns: "system", method: "get_sysinfo" },
+	// Time
+	{ ns: "time", method: "get_time" },
+	{ ns: "time", method: "get_timezone" },
+	// Wi-Fi / network
+	{ ns: "netif", method: "get_scaninfo", arg: { refresh: 0 } },
+	// Cloud
+	{ ns: "cnCloud", method: "get_info" },
+	{ ns: "smartlife.iot.common.cloud", method: "get_info" },
+	// Motion (PIR) sensor
+	{ ns: "smartlife.iot.PIR", method: "get_config" },
+	{ ns: "smartlife.iot.PIR", method: "get_adc_value" },
+	// Ambient-light (LAS) sensor
+	{ ns: "smartlife.iot.LAS", method: "get_config" },
+	{ ns: "smartlife.iot.LAS", method: "get_adc_value" },
+	// Dimmer
+	{ ns: "smartlife.iot.dimmer", method: "get_dimmer_parameters" },
+	{ ns: "smartlife.iot.dimmer", method: "get_default_behavior" },
+	// Rules
+	{ ns: "smartlife.iot.common.schedule", method: "get_rules" },
+	{ ns: "smartlife.iot.common.schedule", method: "get_next_action" },
+	{ ns: "smartlife.iot.common.count_down", method: "get_rules" },
+	{ ns: "smartlife.iot.common.anti_theft", method: "get_rules" },
+	// Energy (unlikely on a dimmer, probed for completeness)
+	{ ns: "smartlife.iot.common.emeter", method: "get_realtime" },
+	{ ns: "emeter", method: "get_realtime" }
 ];
 
 for (const { ns, method, arg } of PROBES) {
-  const label = `${ns}.${method}`;
-  process.stdout.write(`── ${label} ${"─".repeat(Math.max(0, 56 - label.length))}\n`);
-  try {
-    const response = (await api.protocol.send(target, { [ns]: { [method]: arg ?? {} } })) as Record<
-      string,
-      Record<string, unknown>
-    >;
-    const section = response[ns]?.[method];
-    if (section === undefined) {
-      console.dir(response, { depth: null, colors: true });
-    } else {
-      console.dir(section, { depth: null, colors: true });
-    }
-  } catch (err) {
-    console.log(`  (no response: ${(err as Error).message})`);
-  }
-  console.log("");
+	const label = `${ns}.${method}`;
+	process.stdout.write(`── ${label} ${"─".repeat(Math.max(0, 56 - label.length))}\n`);
+	try {
+		const response = (await api.protocol.send(target, { [ns]: { [method]: arg ?? {} } })) as Record<string, Record<string, unknown>>;
+		const section = response[ns]?.[method];
+		if (section === undefined) {
+			console.dir(response, { depth: null, colors: true });
+		} else {
+			console.dir(section, { depth: null, colors: true });
+		}
+	} catch (err) {
+		console.log(`  (no response: ${(err as Error).message})`);
+	}
+	console.log("");
 }
 
 process.exit(0);

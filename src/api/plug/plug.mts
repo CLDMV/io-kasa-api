@@ -110,7 +110,12 @@ export function on(target: DeviceTarget, options?: CommandOptions): Promise<OpRe
 				const info = await readSysInfo(target);
 				if (self.events.isFailure(info)) return false;
 				const kids = info.children;
-				if (kids && kids.length > 0) return verifyState(target, 1, kids.map((c) => c.id));
+				if (kids && kids.length > 0)
+					return verifyState(
+						target,
+						1,
+						kids.map((c) => c.id)
+					);
 				return info.relay_state === 1;
 			}
 		}
@@ -135,7 +140,12 @@ export function off(target: DeviceTarget, options?: CommandOptions): Promise<OpR
 				const info = await readSysInfo(target);
 				if (self.events.isFailure(info)) return false;
 				const kids = info.children;
-				if (kids && kids.length > 0) return verifyState(target, 0, kids.map((c) => c.id));
+				if (kids && kids.length > 0)
+					return verifyState(
+						target,
+						0,
+						kids.map((c) => c.id)
+					);
 				return info.relay_state === 0;
 			}
 		}

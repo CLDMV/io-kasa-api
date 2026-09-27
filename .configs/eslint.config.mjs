@@ -5,7 +5,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
 	{
-		ignores: ["**/dist/**", "**/node_modules/**", "**/out/**", "**/.vite/**", "docs/**", "types/**"],
+		ignores: ["**/dist/**", "**/node_modules/**", "**/out/**", "**/.vite/**", "docs/**", "types/**"]
 	},
 	js.configs.recommended,
 	...tseslint.configs.recommended,
@@ -14,7 +14,7 @@ export default tseslint.config(
 		files: ["**/*.{ts,mts,cts}"],
 		languageOptions: {
 			ecmaVersion: 2023,
-			sourceType: "module",
+			sourceType: "module"
 		},
 		rules: {
 			"@typescript-eslint/no-unused-vars": [
@@ -22,11 +22,11 @@ export default tseslint.config(
 				{
 					argsIgnorePattern: "^_",
 					varsIgnorePattern: "^_",
-					caughtErrorsIgnorePattern: "^_",
-				},
+					caughtErrorsIgnorePattern: "^_"
+				}
 			],
-			"@typescript-eslint/consistent-type-imports": "error",
-		},
+			"@typescript-eslint/consistent-type-imports": "error"
+		}
 	},
 	{
 		// Plain JS / ESM scripts (dev-guard, config files) — Node runtime.
@@ -34,7 +34,7 @@ export default tseslint.config(
 		languageOptions: {
 			ecmaVersion: 2023,
 			sourceType: "module",
-			globals: globals.node,
-		},
+			globals: globals.node
+		}
 	}
 );

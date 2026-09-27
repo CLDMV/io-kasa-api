@@ -67,18 +67,15 @@ async function rawSetTime(target: DeviceTarget, method: string, arg: string, ms:
 }
 
 /** Raw default-behavior fetch — for verifying doubleClick / longPress writes. */
-async function rawDefaultBehavior(target: DeviceTarget): Promise<{ double_click?: { mode?: string }; long_press?: { mode?: string } } | Failure> {
+async function rawDefaultBehavior(
+	target: DeviceTarget
+): Promise<{ double_click?: { mode?: string }; long_press?: { mode?: string } } | Failure> {
 	const response = await self.protocol.send(target, { [NS]: { get_default_behavior: {} } });
 	return unwrap(response, "get_default_behavior");
 }
 
 /** Build a fade/gentle ramp resource: derived `get` from `parameters`, `set` via `rawSetTime`. */
-function rampResource(
-	op: string,
-	field: keyof DimmerParameters,
-	method: string,
-	arg: string
-): DimmerApi["fade"]["on"] {
+function rampResource(op: string, field: keyof DimmerParameters, method: string, arg: string): DimmerApi["fade"]["on"] {
 	return {
 		get: (target) =>
 			self.events.run(`${op}.get`, target, [], async () => {
@@ -143,7 +140,11 @@ export const gentle: DimmerApi["gentle"] = {
 };
 
 /** Shared body for `doubleClick.set` / `longPress.set` (only the verb differs). */
-function buildPressAction(op: string, method: string, behaviorKey: "double_click" | "long_press"): {
+function buildPressAction(
+	op: string,
+	method: string,
+	behaviorKey: "double_click" | "long_press"
+): {
 	set: (target: DeviceTarget, mode: DimmerActionMode, brightnessLevel?: number, options?: CommandOptions) => Promise<OpResult>;
 } {
 	return {

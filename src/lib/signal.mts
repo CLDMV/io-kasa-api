@@ -82,9 +82,7 @@ export function buildSignal(api: AnyApi): SignalApi {
 
 			// Bulk-read sysinfo (per-device timeout pinned). For object refs we
 			// can pin the timeout; for string refs the bulk wrapper resolves them.
-			const probed: DeviceRef[] = refs.map((r) =>
-				typeof r === "string" ? r : ({ ...r, timeoutMs } as DeviceTarget)
-			);
+			const probed: DeviceRef[] = refs.map((r) => (typeof r === "string" ? r : ({ ...r, timeoutMs } as DeviceTarget)));
 			const results = await api.bulk.device.info.get(probed);
 
 			const entries: SignalEntry[] = results.map((r) => {

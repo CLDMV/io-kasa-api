@@ -37,8 +37,8 @@ const MODE = process.argv[2];
 const REDIRECT_SERVER = process.argv[3] ?? "homelab.cldmv.net";
 
 if (!["info", "backup", "redirect", "restore", "bind"].includes(MODE ?? "")) {
-  console.error("Usage: cloud-ctl.mts <info|backup|redirect|restore|bind> [server]");
-  process.exit(1);
+	console.error("Usage: cloud-ctl.mts <info|backup|redirect|restore|bind> [server]");
+	process.exit(1);
 }
 
 const api = await createKasaApi();
@@ -47,89 +47,89 @@ const target = { host: ALLOWED_HOST };
 // Guard: prove we're talking to the Pantry Light and nothing else.
 const sys = await api.device.info.get(target);
 if (!sys.ok || !sys.value) {
-  console.error(`Cannot reach ${ALLOWED_HOST}: ${sys.error ?? "no response"}`);
-  process.exit(1);
+	console.error(`Cannot reach ${ALLOWED_HOST}: ${sys.error ?? "no response"}`);
+	process.exit(1);
 }
 if (sys.value.alias !== EXPECTED_ALIAS) {
-  console.error(`Refusing: ${ALLOWED_HOST} alias is "${sys.value.alias}", expected "${EXPECTED_ALIAS}".`);
-  process.exit(1);
+	console.error(`Refusing: ${ALLOWED_HOST} alias is "${sys.value.alias}", expected "${EXPECTED_ALIAS}".`);
+	process.exit(1);
 }
 console.log(`Target: "${sys.value.alias}" (${sys.value.model}) at ${ALLOWED_HOST}\n`);
 
 /** Read the device's current cnCloud config. */
 async function cloudInfo() {
-  const r = await api.protocol.send(target, { cnCloud: { get_info: {} } });
-  return (r.cnCloud?.get_info ?? {}) as Record<string, unknown>;
+	const r = await api.protocol.send(target, { cnCloud: { get_info: {} } });
+	return (r.cnCloud?.get_info ?? {}) as Record<string, unknown>;
 }
 
 /** Send cnCloud.set_server_url; throws on a non-zero err_code. */
 async function setServer(server: string) {
-  const r = await api.protocol.send(target, { cnCloud: { set_server_url: { server } } });
-  const res = r.cnCloud?.set_server_url as { err_code?: number; err_msg?: string } | undefined;
-  if (!res || res.err_code !== 0) {
-    throw new Error(`set_server_url rejected: ${JSON.stringify(res)}`);
-  }
+	const r = await api.protocol.send(target, { cnCloud: { set_server_url: { server } } });
+	const res = r.cnCloud?.set_server_url as { err_code?: number; err_msg?: string } | undefined;
+	if (!res || res.err_code !== 0) {
+		throw new Error(`set_server_url rejected: ${JSON.stringify(res)}`);
+	}
 }
 
 if (MODE === "info") {
-  console.dir(await cloudInfo(), { depth: null });
-  process.exit(0);
+	console.dir(await cloudInfo(), { depth: null });
+	process.exit(0);
 }
 
 if (MODE === "backup") {
-  if (existsSync(BACKUP_FILE)) {
-    console.log(`Backup already exists — keeping the original, not overwriting:`);
-    console.dir(JSON.parse(readFileSync(BACKUP_FILE, "utf8")), { depth: null });
-    process.exit(0);
-  }
-  const cnCloud = await cloudInfo();
-  const backup = { host: ALLOWED_HOST, alias: EXPECTED_ALIAS, savedAt: new Date().toISOString(), cnCloud };
-  writeFileSync(BACKUP_FILE, JSON.stringify(backup, null, 2));
-  console.log(`Backed up cloud config → ${BACKUP_FILE}`);
-  console.log(`Original server: ${cnCloud.server}`);
-  process.exit(0);
+	if (existsSync(BACKUP_FILE)) {
+		console.log(`Backup already exists — keeping the original, not overwriting:`);
+		console.dir(JSON.parse(readFileSync(BACKUP_FILE, "utf8")), { depth: null });
+		process.exit(0);
+	}
+	const cnCloud = await cloudInfo();
+	const backup = { host: ALLOWED_HOST, alias: EXPECTED_ALIAS, savedAt: new Date().toISOString(), cnCloud };
+	writeFileSync(BACKUP_FILE, JSON.stringify(backup, null, 2));
+	console.log(`Backed up cloud config → ${BACKUP_FILE}`);
+	console.log(`Original server: ${cnCloud.server}`);
+	process.exit(0);
 }
 
 if (MODE === "bind") {
-  const backedUpUser = existsSync(BACKUP_FILE)
-    ? (JSON.parse(readFileSync(BACKUP_FILE, "utf8")).cnCloud?.username as string | undefined)
-    : undefined;
-  const username = process.env.KASA_CLOUD_USER ?? backedUpUser;
-  const password = process.env.KASA_CLOUD_PASS;
-  if (!username) {
-    console.error("No username — set KASA_CLOUD_USER (or have a backup file with one).");
-    process.exit(1);
-  }
-  if (!password) {
-    console.error("No password — set the KASA_CLOUD_PASS env var (kept out of argv and logs).");
-    process.exit(1);
-  }
-  console.log(`bind: re-associating device with cloud account ${username} ...`);
-  const r = await api.protocol.send(target, { cnCloud: { bind: { username, password } } });
-  const res = r.cnCloud?.bind as { err_code?: number; err_msg?: string } | undefined;
-  if (!res || res.err_code !== 0) {
-    console.error(`✗ bind failed: ${JSON.stringify(res)}`);
-    process.exit(1);
-  }
-  const after = await cloudInfo();
-  console.log(
-    after.binded === 1
-      ? `✓ Re-bound — binded=1, username=${after.username}`
-      : `⚠ bind returned ok but binded=${after.binded} — check the Kasa app.`
-  );
-  process.exit(0);
+	const backedUpUser = existsSync(BACKUP_FILE)
+		? (JSON.parse(readFileSync(BACKUP_FILE, "utf8")).cnCloud?.username as string | undefined)
+		: undefined;
+	const username = process.env.KASA_CLOUD_USER ?? backedUpUser;
+	const password = process.env.KASA_CLOUD_PASS;
+	if (!username) {
+		console.error("No username — set KASA_CLOUD_USER (or have a backup file with one).");
+		process.exit(1);
+	}
+	if (!password) {
+		console.error("No password — set the KASA_CLOUD_PASS env var (kept out of argv and logs).");
+		process.exit(1);
+	}
+	console.log(`bind: re-associating device with cloud account ${username} ...`);
+	const r = await api.protocol.send(target, { cnCloud: { bind: { username, password } } });
+	const res = r.cnCloud?.bind as { err_code?: number; err_msg?: string } | undefined;
+	if (!res || res.err_code !== 0) {
+		console.error(`✗ bind failed: ${JSON.stringify(res)}`);
+		process.exit(1);
+	}
+	const after = await cloudInfo();
+	console.log(
+		after.binded === 1
+			? `✓ Re-bound — binded=1, username=${after.username}`
+			: `⚠ bind returned ok but binded=${after.binded} — check the Kasa app.`
+	);
+	process.exit(0);
 }
 
 // redirect / restore — both require the backup as a safety net.
 if (!existsSync(BACKUP_FILE)) {
-  console.error(`No backup at ${BACKUP_FILE} — run \`backup\` first.`);
-  process.exit(1);
+	console.error(`No backup at ${BACKUP_FILE} — run \`backup\` first.`);
+	process.exit(1);
 }
 const backup = JSON.parse(readFileSync(BACKUP_FILE, "utf8")) as { cnCloud: { server?: string } };
 const originalServer = backup.cnCloud?.server;
 if (!originalServer) {
-  console.error("Backup file has no original server URL — aborting.");
-  process.exit(1);
+	console.error("Backup file has no original server URL — aborting.");
+	process.exit(1);
 }
 
 const newServer = MODE === "redirect" ? REDIRECT_SERVER : originalServer;
@@ -139,8 +139,8 @@ console.log(`${MODE}: cloud server  ${before.server}  →  ${newServer}`);
 await setServer(newServer);
 const after = await cloudInfo();
 if (after.server !== newServer) {
-  console.error(`✗ Verify failed — server is "${after.server}", expected "${newServer}".`);
-  process.exit(1);
+	console.error(`✗ Verify failed — server is "${after.server}", expected "${newServer}".`);
+	process.exit(1);
 }
 console.log(`✓ Cloud server is now: ${after.server}`);
 
