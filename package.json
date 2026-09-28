@@ -1,0 +1,73 @@
+{
+	"name": "@cldmv/io-kasa-api",
+	"version": "0.0.0",
+	"description": "Slothlet-powered API module for controlling TP-Link Kasa IoT devices on the local network.",
+	"type": "module",
+	"license": "Apache-2.0",
+	"author": {
+		"name": "Shinrai",
+		"company": "CLDMV",
+		"email": "git+npm@cldmv.net",
+		"url": "https://cldmv.net"
+	},
+	"contributors": [
+		{
+			"name": "CLDMV",
+			"url": "https://github.com/CLDMV"
+		}
+	],
+	"funding": {
+		"type": "github",
+		"url": "https://github.com/sponsors/shinrai"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"sideEffects": false,
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/CLDMV/io-kasa-api.git"
+	},
+	"bugs": {
+		"url": "https://github.com/CLDMV/io-kasa-api/issues"
+	},
+	"homepage": "https://github.com/CLDMV/io-kasa-api#readme",
+	"keywords": [
+		"kasa",
+		"tp-link",
+		"tplink",
+		"smarthome",
+		"smart-home",
+		"home-automation",
+		"iot",
+		"smart-plug",
+		"smart-bulb",
+		"smart-switch",
+		"dimmer",
+		"hs100",
+		"hs110",
+		"hs300",
+		"slothlet",
+		"local-network",
+		"nodejs",
+		"esm",
+		"typescript"
+	],
+	"scripts": {
+		"build": "echo \"no build step on the v4 scaffold - the tsc build of src/ lives on dev; stub kept because the coverage and bundle-size jobs run npm run build\"",
+		"build:ci": "echo \"no build step on the v4 scaffold\"",
+		"typecheck": "echo \"no TypeScript sources on the v4 scaffold - type checking runs on dev\"",
+		"test": "node tests/run-vitest.mjs",
+		"test:watch": "vitest --config .configs/vitest.config.mts",
+		"coverage": "node tests/run-vitest.mjs --coverage-quiet",
+		"ci:coverage": "npm run coverage"
+	},
+	"engines": {
+		"node": ">=20.19.0"
+	},
+	"devDependencies": {
+		"@cldmv/vitest-runner": "^1.4.2",
+		"@vitest/coverage-v8": "^5.0.2",
+		"vitest": "^5.0.2"
+	}
+}

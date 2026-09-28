@@ -1,0 +1,50 @@
+#
+#	@Project: @cldmv/io-kasa-api
+#	@Filename: /.github/workflows/next-reset.yml
+#	@Date: 2026-05-22T00:00:00-07:00 (1779433200)
+#	@Author: Nate Corcoran <CLDMV>
+#	@Email: <Shinrai@users.noreply.github.com>
+#	-----
+#	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+#	@Last modified time: 2026-10-02T12:32:41-07:00 (1790969561)
+#	-----
+#	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+#
+
+# Individual repo: .github/workflows/next-reset.yml
+#
+# v4 core: after a release lands on master, re-sync the integration branches
+# (CLDMV/.github docs/conventions/release-flow-v4.md §6.3, §7).
+#
+#   - `hotfixes` is ALWAYS force-reset to master HEAD after any release.
+#   - `next` depends on which lane released:
+#       * normal release (next → master, or a v3-style feat → master):
+#         force-reset `next` to master HEAD (§7.1).
+#       * hotfix release (hotfixes → master): MERGE master into `next` instead,
+#         so next's accumulated feature work is preserved (§7.2, option B).
+#
+# Thin caller: all job logic (the wait-for-tags gate + the branch sync) lives in
+# the reusable, pinned at @v4. Bumping the pin carries fixes without editing
+# this file.
+name: ♻️ Next/Hotfixes Reset (v4)
+
+on:
+    push:
+        branches: [master, main]
+
+concurrency:
+    group: next-reset-${{ github.repository }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    sync:
+        permissions:
+            contents: write
+        uses: CLDMV/.github/.github/workflows/workflow-next-reset.yml@v4
+        secrets:
+            # Map your repo/org secrets to the expected names.
+            BOT_APP_CLIENT_ID: ${{ secrets.CLDMV_BOT_APP_CLIENT_ID }}
+            BOT_APP_PRIVATE_KEY: ${{ secrets.CLDMV_BOT_APP_PRIVATE_KEY }}
