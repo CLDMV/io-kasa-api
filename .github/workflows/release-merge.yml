@@ -1,9 +1,14 @@
 #
-# @Project: @cldmv/io-kasa-api
-# @Filename: /.github/workflows/release-merge.yml
-# @Author: Nate Corcoran <CLDMV>
-# @Email: <Shinrai@users.noreply.github.com>
-# @Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+#	@Project: @cldmv/io-kasa-api
+#	@Filename: /.github/workflows/release-merge.yml
+#	@Date: 2026-09-27T12:49:59-07:00 (1790538599)
+#	@Author: Nate Corcoran <CLDMV>
+#	@Email: <Shinrai@users.noreply.github.com>
+#	-----
+#	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+#	@Last modified time: 2026-10-02T12:32:42-07:00 (1790969562)
+#	-----
+#	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
 #
 
 # Individual repo: .github/workflows/release-merge.yml

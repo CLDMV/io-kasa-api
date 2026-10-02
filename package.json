@@ -23,7 +23,8 @@
 		"lint:fix": "eslint --config .configs/eslint.config.mjs . --fix",
 		"format": "prettier --config .configs/.prettierrc --write .",
 		"format:check": "prettier --config .configs/.prettierrc --check .",
-		"prepare": "node -e \"import('./.githooks/install.mjs').catch(()=>{})\""
+		"prepare": "node -e \"import('./.githooks/install.mjs').catch(()=>{})\"",
+		"fix:headers": "fix-headers --config .configs/fix-headers.json"
 	},
 	"keywords": [
 		"kasa",
@@ -82,6 +83,8 @@
 		"esbuild": "^0.28.0"
 	},
 	"devDependencies": {
+		"@cldmv/configs": "^1.2.0",
+		"@cldmv/fix-headers": "^2.1.1",
 		"@cldmv/jsonv": "^1.0.9",
 		"@cldmv/prettier-plugin-jsonv": "^1.0.6",
 		"@cldmv/slothlet-types": "^3.20.0",

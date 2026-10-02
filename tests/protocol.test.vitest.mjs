@@ -1,3 +1,18 @@
+/**
+ *
+ *	@Project: @cldmv/io-kasa-api
+ *	@Filename: /tests/protocol.test.vitest.mjs
+ *	@Date: 2026-05-17T18:36:57-07:00 (1779068217)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-02T12:32:45-07:00 (1790969565)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
 import { describe, it, expect } from "vitest";
 import { encryptTcp, decryptTcp, encryptUdp, decryptUdp, send, sendUdp } from "../src/api/protocol/protocol.mts";
 import {

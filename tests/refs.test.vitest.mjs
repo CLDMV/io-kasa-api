@@ -1,4 +1,19 @@
 /**
+ *
+ *	@Project: @cldmv/io-kasa-api
+ *	@Filename: /tests/refs.test.vitest.mjs
+ *	@Date: 2026-05-19T19:09:58-07:00 (1779242998)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-02T12:32:46-07:00 (1790969566)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
  * Ref-resolution + force + bulk-mixed + signal-stringy tests.
  *
  * The wrapper layer in `src/lib/refs.mts` is what makes `api.switch.on("Lamp")`

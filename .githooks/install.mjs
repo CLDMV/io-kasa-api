@@ -1,5 +1,20 @@
 #!/usr/bin/env node
 /**
+ *
+ *	@Project: @cldmv/io-kasa-api
+ *	@Filename: /.githooks/install.mjs
+ *	@Date: 2026-09-27T12:59:36-07:00 (1790539176)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-02T12:32:38-07:00 (1790969558)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
  * @fileoverview Installs the committed pre-commit hook into `.git/hooks/pre-commit`.
  *
  * Wire it into package.json so it runs on `npm install`. Use the guarded form

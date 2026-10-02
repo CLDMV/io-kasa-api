@@ -1,5 +1,20 @@
 #!/usr/bin/env node
 /**
+ *
+ *	@Project: @cldmv/io-kasa-api
+ *	@Filename: /examples/watch-aliases.mjs
+ *	@Date: 2026-05-19T20:12:41-07:00 (1779246761)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-02T12:32:44-07:00 (1790969564)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
  * Continuous alias drift correction.
  *
  * Watches a desired-state JSON file on an interval. On every tick the file
