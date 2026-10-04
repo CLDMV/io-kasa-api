@@ -84,7 +84,7 @@
 	},
 	"devDependencies": {
 		"@cldmv/configs": "^1.2.0",
-		"@cldmv/fix-headers": "^2.1.1",
+		"@cldmv/fix-headers": "^2.1.4",
 		"@cldmv/jsonv": "^1.0.9",
 		"@cldmv/prettier-plugin-jsonv": "^1.0.6",
 		"@cldmv/slothlet-types": "^3.20.0",
