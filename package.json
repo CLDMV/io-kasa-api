@@ -11,8 +11,8 @@
 	},
 	"scripts": {
 		"build": "tsc -p .configs/tsconfig.build.json",
-		"build:ci": "npm run typecheck && npm run build",
-		"typecheck": "tsc -p .configs/tsconfig.base.json",
+		"build:ci": "npm run types:check && npm run build",
+		"types:check": "tsc -p .configs/tsconfig.base.json",
 		"test": "node tests/run-vitest.mjs",
 		"test:watch": "vitest --config .configs/vitest.config.mts",
 		"coverage": "node tests/run-vitest.mjs --coverage-quiet",

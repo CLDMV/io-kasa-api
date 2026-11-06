@@ -553,7 +553,7 @@ If the legacy port really is gone (toggle on and 9999 still refused), the device
 
 ```sh
 npm test          # vitest suite
-npm run typecheck # tsc, no emit
+npm run types:check # tsc, no emit
 ```
 
 ## License
